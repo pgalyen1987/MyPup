@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyPup - Retro Platformer</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="game-container">
+        <div id="menu-screen" class="screen">
+            <img src="MyPupLogo.png" alt="MyPup Platformer" id="game-logo">
+            <div id="customization-panel">
+                <h2>Customize Your Dog</h2>
+                <div id="debug-mode-indicator" class="debug-indicator" style="display: none;"></div>
+                <div id="api-key-section" class="api-key-section">
+                    <div id="api-key-status" class="api-key-status"></div>
+                    <button id="clear-api-key-btn" class="clear-button">Clear API Key</button>
+                    <button id="set-api-key-btn" class="clear-button">Set/Change API Key</button>
+                </div>
+                <div class="upload-section">
+                    <label for="dog-image-upload" class="upload-button">
+                        📸 Upload Your Dog's Photo
+                    </label>
+                    <input type="file" id="dog-image-upload" accept="image/*" style="display: none;">
+                    <div id="upload-preview" class="preview-container"></div>
+                </div>
+                <div id="generation-status" class="status-message"></div>
+                <button id="generate-sprite-btn" class="action-button" disabled>Generate Sprite Sheet</button>
+                <button id="start-game-btn" class="action-button" disabled>Start Game</button>
+            </div>
+        </div>
+        <div id="game-screen" class="screen hidden">
+            <div id="debug-mode-indicator-game" class="debug-indicator-game" style="display: none;"></div>
+            <div id="phaser-game"></div>
+            <div id="game-ui">
+                <div id="score">Score: 0</div>
+                <div id="lives">Lives: 3</div>
+                <button id="pause-btn" class="ui-button">Pause</button>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+    <script src="config.js"></script>
+    <script src="api.js"></script>
+    <script src="test-models.js"></script>
+    <script src="levels.js"></script>
+    <script src="level-generator.js"></script>
+    <script src="character.js"></script>
+    <script src="game.js"></script>
+    <script>
+        // Function to generate location-based background (called after API key verification)
+        window.generateLocationBackground = async function() {
+            if (!window.api || !window.api.apiKey) {
+                console.log('No API key available for background generation');
+                return;
+            }
+
+            try {
+                // Check if we have a cached background (less than 24 hours old AND version 2 with animation)
+                const cachedMeta = localStorage.getItem('location_background_meta');
+                const cachedBg = localStorage.getItem('location_background');
+                
+                if (cachedMeta && cachedBg) {
+                    const meta = JSON.parse(cachedMeta);
+                    const age = Date.now() - meta.timestamp;
+                    const hoursOld = age / (1000 * 60 * 60);
+                    
+                    // Check cache version - version 2 is the new 4-frame animated format
+                    const cacheVersion = meta.version || 1; // Old caches don't have version, default to 1
+                    
+                    if (hoursOld < 24 && cacheVersion >= 2) {
+                        console.log('Using cached location background (age:', hoursOld.toFixed(1), 'hours, version:', cacheVersion, ')');
+                        window.locationBackground = cachedBg;
+                        return;
+                    } else if (cacheVersion < 2) {
+                        console.log('Cached background is old format (version', cacheVersion, '), regenerating with 4-frame animation...');
+                        // Clear old cache
+                        localStorage.removeItem('location_background');
+                        localStorage.removeItem('location_background_meta');
+                    }
+                }
+                
+                // Generate new background
+                console.log('Generating new location-based background...');
+                window.locationBackground = await window.api.generateLocationBackground();
+                console.log('Location background ready');
+                
+                // If game is already running, trigger background update
+                if (window.gameInstance && typeof window.gameInstance.updateBackground === 'function') {
+                    console.log('Game is running, updating background...');
+                    window.gameInstance.updateBackground();
+                }
+            } catch (error) {
+                console.warn('Could not generate location background:', error);
+                // Continue without location background - game will use default
+            }
+        };
+
+        // Initialize on page load - start background generation immediately if key is available
+        if (typeof window !== 'undefined') {
+            window.addEventListener('DOMContentLoaded', async () => {
+                console.log('Page loaded, checking for API key...');
+                
+                // Check if we have a cached background first (fast path)
+                const cachedMeta = localStorage.getItem('location_background_meta');
+                const cachedBg = localStorage.getItem('location_background');
+                
+                if (cachedMeta && cachedBg) {
+                    const meta = JSON.parse(cachedMeta);
+                    const cacheVersion = meta.version || 1;
+                    const age = Date.now() - meta.timestamp;
+                    const hoursOld = age / (1000 * 60 * 60);
+                    
+                    if (hoursOld < 24 && cacheVersion >= 2) {
+                        console.log('Using cached location background (age:', hoursOld.toFixed(1), 'hours, version:', cacheVersion, ')');
+                        window.locationBackground = cachedBg;
+                        return; // Background ready, no need to generate
+                    }
+                }
+                
+                // If no valid cache, check if we have an API key and start generation immediately
+                const savedKey = localStorage.getItem('gemini_api_key');
+                if (savedKey && window.api) {
+                    // Key exists, verify it and start background generation
+                    console.log('API key found, verifying and starting background generation...');
+                    // updateApiKeyStatus will verify and trigger generateLocationBackground
+                    if (window.updateApiKeyStatus) {
+                        window.updateApiKeyStatus();
+                    }
+                } else {
+                    console.log('No API key found, background generation will start when key is set');
+                }
+            });
+        }
+    </script>
+</body>
+</html>
