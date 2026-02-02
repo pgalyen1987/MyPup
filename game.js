@@ -1165,13 +1165,18 @@ class Game {
                     }
                 }
                 
-                // Load tiles as Phaser textures if available
+                    // Load tiles as Phaser textures if available
                 if (tiles) {
                     // Helper function to add base64 texture and wait for it to load
                     const addTexture = (key, base64Data) => {
                         return new Promise((resolve, reject) => {
                             try {
                                 // Check if base64 data is valid
+                                if (!base64Data || typeof base64Data !== 'string') {
+                                    console.warn(`Invalid base64 data for ${key}`);
+                                    resolve(false);
+                                    return;
+                                }
                                 if (!base64Data || typeof base64Data !== 'string') {
                                     console.warn(`Invalid base64 data for ${key}:`, typeof base64Data);
                                     reject(new Error(`Invalid base64 data for ${key}`));
@@ -1265,28 +1270,53 @@ class Game {
                         }
                     };
                     
+                    // Update tile loading to set aiTilesAvailable flag
                     if (tiles.platform) {
                         texturePromises.push(addTexture('tile_platform', tiles.platform).then(() => {
                             aiTilesAvailable = true;
                             console.log('✓ AI platform tile ready');
-                            reVerifyBackground(); // Re-verify background after each texture
-                        }).catch(err => console.warn('Failed to load platform tile:', err)));
+                            reVerifyBackground();
+                            return true;
+                        }).catch(err => {
+                            console.error('Failed to load platform tile:', err);
+                            return false;
+                        }));
+                    }
+                    
+                    if (tiles.water) {
+                        texturePromises.push(addTexture('tile_water', tiles.water).then(() => {
+                            aiTilesAvailable = true;
+                            console.log('✓ AI water tile ready');
+                            reVerifyBackground();
+                            return true;
+                        }).catch(err => {
+                            console.error('Failed to load water tile:', err);
+                            return false;
+                        }));
                     }
                     
                     if (tiles.treat) {
                         texturePromises.push(addTexture('tile_treat', tiles.treat).then(() => {
                             aiTilesAvailable = true;
                             console.log('✓ AI treat tile ready');
-                            reVerifyBackground(); // Re-verify background after each texture
-                        }).catch(err => console.warn('Failed to load treat tile:', err)));
+                            reVerifyBackground();
+                            return true;
+                        }).catch(err => {
+                            console.error('Failed to load treat tile:', err);
+                            return false;
+                        }));
                     }
                     
                     if (tiles.bone) {
                         texturePromises.push(addTexture('tile_bone', tiles.bone).then(() => {
                             aiTilesAvailable = true;
                             console.log('✓ AI bone tile ready');
-                            reVerifyBackground(); // Re-verify background after each texture
-                        }).catch(err => console.warn('Failed to load bone tile:', err)));
+                            reVerifyBackground();
+                            return true;
+                        }).catch(err => {
+                            console.error('Failed to load bone tile:', err);
+                            return false;
+                        }));
                     }
                     
                     // Wait for all textures to load
@@ -1380,6 +1410,11 @@ class Game {
                             p = scene.add.rectangle(centerX, centerY, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x8B4513);
                             scene.physics.add.existing(p, true);
                             this.platforms.add(p);
+                            // Set collision box to exactly 64x64 (tile size)
+                            if (p.body) {
+                                p.body.setSize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
+                                p.body.setOffset(0, 0);
+                            }
                         }
                         // Default origin is 0.5, so it stays centered at centerX, centerY
                         p.setVisible(false);
@@ -1420,14 +1455,19 @@ class Game {
                             w = scene.add.rectangle(centerX, centerY, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x1E90FF);
                             scene.physics.add.existing(w, true);
                             this.hazards.add(w);
+                            // Set collision box to exactly 64x64 (tile size)
+                            if (w.body) {
+                                w.body.setSize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
+                                w.body.setOffset(0, 0);
+                            }
                         }
                         // Default origin is 0.5
                         w.setVisible(false);
                         
                         // Draw water visual on foreground canvas
                         if (this.foregroundCanvas) {
-                            if (this.aiTilesAvailable && scene.textures.exists('tile_platform')) {
-                                const tempImg = scene.add.image(0, 0, 'tile_platform');
+                            if (this.aiTilesAvailable && scene.textures.exists('tile_water')) {
+                                const tempImg = scene.add.image(0, 0, 'tile_water');
                                 tempImg.setDisplaySize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
                                 tempImg.setOrigin(0.5, 0.5);
                                 this.foregroundCanvas.draw(tempImg, centerX, centerY);
@@ -1664,6 +1704,9 @@ class Game {
         groundPlatform.setDepth(-1); // Behind everything
         // Static bodies are automatically immovable, but ensure body exists
         if (groundPlatform.body) {
+            // Set collision box height to exactly 64x64 (tile size) - width is already actualWidth
+            groundPlatform.body.setSize(actualWidth, CONFIG.TILE_SIZE);
+            groundPlatform.body.setOffset(0, 0);
             // Static bodies don't need setImmovable, but we can set it if the method exists
             if (typeof groundPlatform.body.setImmovable === 'function') {
                 groundPlatform.body.setImmovable(true);

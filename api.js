@@ -642,54 +642,117 @@ CRITICAL CONSTRAINTS:
 
     /**
      * Generate individual 64x64 tiles for procedural level rendering
-     * Returns an object with base64 tile images: { treat, bone, platform }
+     * Returns an object with base64 tile images: { treat, bone, platform, water }
      * 
-     * NOTE: Only generates platform and collectible objects (treat, bone).
+     * NOTE: Generates platform, water/hazard, and collectible objects (treat, bone).
      * - Ground tiles: NOT generated (location-based background serves as ground)
      * - Cat/enemy tiles: NOT generated (uses static Cat.png file)
-     * - Only 3 POST calls total: platform, treat, bone
+     * - Platform and Water tiles use location data for context-aware generation
      */
     async generateLevelTiles(theme) {
         try {
             console.log(`Generating individual tiles for theme: ${theme}`);
-            console.log('Only generating: platform, treat, bone (3 POST calls total)');
+            
+            // Get location data for P and W tiles
+            let locationData = null;
+            let locationContext = '';
+            try {
+                const metaStr = localStorage.getItem('location_background_meta');
+                if (metaStr) {
+                    const meta = JSON.parse(metaStr);
+                    if (meta.location) {
+                        locationData = meta.location;
+                        const city = locationData.city || '';
+                        const region = locationData.region || '';
+                        const country = locationData.country || '';
+                        locationContext = `${city}${region ? ', ' + region : ''}${country ? ', ' + country : ''}`.trim();
+                    }
+                    if (meta.timeWeather) {
+                        const weather = meta.timeWeather;
+                        if (locationContext) {
+                            locationContext += ` (${weather.season || ''} ${weather.timeOfDay || ''})`.trim();
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('Could not parse location data for tile generation:', e);
+            }
             
             const tiles = {};
-            
-            // Generate platform tile (POST call #1)
-            console.log('POST #1: Generating platform tile...');
             const tileSize = CONFIG.TILE_SIZE;
-            tiles.platform = await this.generateSingleTile(
-                `Generate a single ${tileSize}x${tileSize} pixel art tile of a FLOATING PLATFORM for a platformer game.
-                Style: 16-bit Super Mario World style.
-                Theme: ${theme}
-                The tile should show: a stone or wooden platform block with grass on top.
-                Must work as a standalone floating block.
-                NO text, NO borders. Just the tile.`
-            );
             
-            // Generate treat/collectible tile (POST call #2)
-            console.log('POST #2: Generating treat tile...');
+            // Generate platform tile (POST call #1) - uses location data
+            console.log('POST #1: Generating platform tile...');
+            let platformPrompt = `Generate a single ${tileSize}x${tileSize} pixel art tile of a FLOATING PLATFORM for a platformer game.
+CRITICAL SIZE CONSTRAINTS:
+- EXACT dimensions: ${tileSize}x${tileSize} pixels (no scaling, no borders, no padding)
+- The entire tile must be exactly ${tileSize}x${tileSize} pixels
+- Style: 16-bit Super Mario World style pixel art
+- Theme: ${theme}`;
+            
+            if (locationContext) {
+                platformPrompt += `
+- Location context: ${locationContext}
+- The platform should match the architectural or natural style of this location (e.g., stone blocks for urban areas, wooden planks for rural areas, etc.)`;
+            }
+            
+            platformPrompt += `
+- The tile should show: a stone or wooden platform block with grass or appropriate surface material on top
+- Must work as a standalone floating block
+- NO text, NO borders, NO padding. Just the ${tileSize}x${tileSize} pixel tile.`;
+            
+            tiles.platform = await this.generateSingleTile(platformPrompt);
+            
+            // Generate water/hazard tile (POST call #2) - uses location data
+            console.log('POST #2: Generating water/hazard tile...');
+            let waterPrompt = `Generate a single ${tileSize}x${tileSize} pixel art tile of WATER or HAZARD for a platformer game.
+CRITICAL SIZE CONSTRAINTS:
+- EXACT dimensions: ${tileSize}x${tileSize} pixels (no scaling, no borders, no padding)
+- The entire tile must be exactly ${tileSize}x${tileSize} pixels
+- Style: 16-bit Super Mario World style pixel art
+- Theme: ${theme}`;
+            
+            if (locationContext) {
+                waterPrompt += `
+- Location context: ${locationContext}
+- The water/hazard should match the environment (e.g., ocean water for coastal areas, river water for inland, lava for volcanic regions, etc.)`;
+            }
+            
+            waterPrompt += `
+- The tile should show: animated water surface, lava, or appropriate hazard for the location
+- Transparent background where appropriate
+- NO text, NO borders, NO padding. Just the ${tileSize}x${tileSize} pixel tile.`;
+            
+            tiles.water = await this.generateSingleTile(waterPrompt);
+            
+            // Generate treat/collectible tile (POST call #3)
+            console.log('POST #3: Generating treat tile...');
             tiles.treat = await this.generateSingleTile(
                 `Generate a single ${tileSize}x${tileSize} pixel art tile of a DOG TREAT collectible item.
-                Style: 16-bit pixel art, cute and colorful.
-                Theme: ${theme}
-                The tile should show: a golden/orange dog biscuit or bone-shaped treat.
-                Transparent background.
-                NO text, NO borders. Just the item on transparent background.`
+CRITICAL SIZE CONSTRAINTS:
+- EXACT dimensions: ${tileSize}x${tileSize} pixels (no scaling, no borders, no padding)
+- The entire tile must be exactly ${tileSize}x${tileSize} pixels
+- Style: 16-bit pixel art, cute and colorful
+- Theme: ${theme}
+- The tile should show: a golden/orange dog biscuit or bone-shaped treat
+- Transparent background
+- NO text, NO borders, NO padding. Just the ${tileSize}x${tileSize} pixel item on transparent background.`
             );
             
-            // Generate bone/goal tile (POST call #3)
-            console.log('POST #3: Generating bone tile...');
+            // Generate bone/goal tile (POST call #4)
+            console.log('POST #4: Generating bone tile...');
             tiles.bone = await this.generateSingleTile(
                 `Generate a single ${tileSize}x${tileSize} pixel art tile of a LARGE BONE (goal item).
-                Style: 16-bit pixel art, shiny and important-looking.
-                The tile should show: a white/cream colored dog bone, slightly glowing or sparkly.
-                Transparent background.
-                NO text. Just the bone on transparent background.`
+CRITICAL SIZE CONSTRAINTS:
+- EXACT dimensions: ${tileSize}x${tileSize} pixels (no scaling, no borders, no padding)
+- The entire tile must be exactly ${tileSize}x${tileSize} pixels
+- Style: 16-bit pixel art, shiny and important-looking
+- The tile should show: a white/cream colored dog bone, slightly glowing or sparkly
+- Transparent background
+- NO text, NO borders, NO padding. Just the ${tileSize}x${tileSize} pixel bone on transparent background.`
             );
             
-            console.log('All 3 tiles generated successfully! (platform, treat, bone)');
+            console.log('All 4 tiles generated successfully! (platform, water, treat, bone)');
             return tiles;
             
         } catch (error) {
@@ -1070,7 +1133,7 @@ Include giant, highly recognizable visual landmarks and iconic features from ${l
                     }
                 }
                 
-                const currentFrame = await this.generateSingleFrame(framePrompt, frameNum, referenceFrames, seed);
+                const currentFrame = await this.generateSingleFrame(framePrompt, frameNum, referenceFrames, seed, totalFrames);
                 frames.push(currentFrame);
                 
                 console.log(`Frame ${frameNum}/${totalFrames} generated successfully (References: ${referenceFrames.length}).`);
@@ -1105,14 +1168,14 @@ Include giant, highly recognizable visual landmarks and iconic features from ${l
     /**
      * Generate a single frame of the background animation
      */
-    async generateSingleFrame(prompt, frameNumber, previousFrameBase64 = null, seed = null) {
-        console.log(`Generating background frame ${frameNumber}/4...`);
+    async generateSingleFrame(prompt, frameNumber, referenceFrames = null, seed = null, totalFrames = 8) {
+        console.log(`Generating background frame ${frameNumber}/${totalFrames}...`);
         
         // Prepare request body
         const parts = [{ text: prompt }];
         
         // If we have reference frames, include them for image-to-image consistency
-        if (referenceFrames && referenceFrames.length > 0) {
+        if (referenceFrames && Array.isArray(referenceFrames) && referenceFrames.length > 0) {
             referenceFrames.forEach((frameBase64, index) => {
                 if (!frameBase64) return;
                 
@@ -1166,7 +1229,7 @@ Include giant, highly recognizable visual landmarks and iconic features from ${l
                 const inline = part.inline_data || part.inlineData;
                 const rawBase64 = `data:${inline.mime_type || inline.mimeType};base64,${inline.data}`;
                 
-                console.log(`Frame ${frameNumber}/4 generated successfully`);
+                console.log(`Frame ${frameNumber}/${totalFrames} generated successfully`);
                 return rawBase64;
             }
             

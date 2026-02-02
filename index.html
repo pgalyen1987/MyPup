@@ -100,7 +100,7 @@
                     return;
                 }
                 
-                console.log('Pre-generating level tiles (platform, treat, bone)...');
+                console.log('Pre-generating level tiles (platform, water, treat, bone)...');
                 const theme = (window.LEVELS && window.LEVELS[0]) ? window.LEVELS[0].theme : 'Sunny Meadow';
                 const tiles = await window.api.generateLevelTiles(theme);
                 
