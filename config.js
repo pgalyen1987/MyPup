@@ -74,7 +74,7 @@ const CONFIG = {
     // Based on test results: gemini-3-pro-image-preview is available
     GEMINI_API_URL: DEBUG_MODE 
         ? 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
-        : 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent',
+        : 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
     
     // Image generation: Use Gemini 3 preview or Gemini 2.5 Flash Image in debug mode
     // Based on test results: gemini-3-pro-image-preview is available and returns images
@@ -83,16 +83,17 @@ const CONFIG = {
         : 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent',
     
     // Game settings
-    GAME_WIDTH: 800,
-    GAME_HEIGHT: 600,
-    GRAVITY: 1500,
-    PLAYER_SPEED: 200,
-    JUMP_FORCE: -600,
+    GAME_WIDTH: 512, // Matches background frame width (512x512)
+    GAME_HEIGHT: 512, // Matches background frame height (512x512)
+    GRAVITY: 1600, // Adjusted for new height
+    PLAYER_SPEED: 220, 
+    JUMP_FORCE: -650,
     
     // Sprite settings
     SPRITE_SHEET_WIDTH: 4, // 4 frames for animation
     SPRITE_SHEET_HEIGHT: 4, // 4 directions/actions
     SPRITE_SIZE: 64, // 64x64 pixels per sprite
+    TILE_SIZE: 64, // Universal tile size
 };
 
 // Load API keys from environment or localStorage
@@ -161,15 +162,12 @@ async function updateApiKeyStatus() {
                     statusEl.innerHTML = `✓ API Key Verified: <code>${maskedKey}</code>`;
                     statusEl.style.color = '#4CAF50';
                     
-                    // Trigger background generation immediately after successful verification
-                    if (window.generateLocationBackground) {
-                        console.log('API key verified, starting background generation immediately...');
-                        // Don't await - let it run in background, but catch errors
-                        window.generateLocationBackground().catch(err => {
-                            console.error('Background generation failed:', err);
-                        });
+                    // Trigger asset pre-generation immediately after successful verification
+                    if (window.preGenerateGameAssets) {
+                        console.log('API key verified, starting asset pre-generation...');
+                        window.preGenerateGameAssets();
                     } else {
-                        console.warn('generateLocationBackground function not available yet');
+                        console.warn('preGenerateGameAssets function not available yet');
                     }
                 } else {
                     statusEl.innerHTML = `❌ API Key Invalid: <code>${maskedKey}</code><br><small>${verification.error}</small>`;

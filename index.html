@@ -9,7 +9,7 @@
 <body>
     <div id="game-container">
         <div id="menu-screen" class="screen">
-            <img src="MyPupLogo.png" alt="MyPup Platformer" id="game-logo">
+            <img src="assets/MyPupLogo.png" alt="MyPup Platformer" id="game-logo">
             <div id="customization-panel">
                 <h2>Customize Your Dog</h2>
                 <div id="debug-mode-indicator" class="debug-indicator" style="display: none;"></div>
@@ -26,7 +26,6 @@
                     <div id="upload-preview" class="preview-container"></div>
                 </div>
                 <div id="generation-status" class="status-message"></div>
-                <button id="generate-sprite-btn" class="action-button" disabled>Generate Sprite Sheet</button>
                 <button id="start-game-btn" class="action-button" disabled>Start Game</button>
             </div>
         </div>
@@ -41,6 +40,7 @@
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+    <script src="AssetStorage.js"></script>
     <script src="config.js"></script>
     <script src="api.js"></script>
     <script src="test-models.js"></script>
@@ -49,87 +49,168 @@
     <script src="character.js"></script>
     <script src="game.js"></script>
     <script>
-        // Function to generate location-based background (called after API key verification)
+        // Function to generate location-based background
         window.generateLocationBackground = async function() {
-            if (!window.api || !window.api.apiKey) {
-                console.log('No API key available for background generation');
-                return;
-            }
+            if (!window.api || !window.api.apiKey) return;
 
             try {
-                // Check if we have a cached background (less than 24 hours old AND version 2 with animation)
+                // Check cache
                 const cachedMeta = localStorage.getItem('location_background_meta');
-                const cachedBg = localStorage.getItem('location_background');
-                
-                if (cachedMeta && cachedBg) {
+                if (cachedMeta) {
                     const meta = JSON.parse(cachedMeta);
                     const age = Date.now() - meta.timestamp;
-                    const hoursOld = age / (1000 * 60 * 60);
-                    
-                    // Check cache version - version 2 is the new 4-frame animated format
-                    const cacheVersion = meta.version || 1; // Old caches don't have version, default to 1
-                    
-                    if (hoursOld < 24 && cacheVersion >= 2) {
-                        console.log('Using cached location background (age:', hoursOld.toFixed(1), 'hours, version:', cacheVersion, ')');
-                        window.locationBackground = cachedBg;
+                    if (age / (1000 * 60 * 60) < 24 && (meta.version || 0) >= 5) {
+                        console.log('Background already cached and valid.');
                         return;
-                    } else if (cacheVersion < 2) {
-                        console.log('Cached background is old format (version', cacheVersion, '), regenerating with 4-frame animation...');
-                        // Clear old cache
-                        localStorage.removeItem('location_background');
-                        localStorage.removeItem('location_background_meta');
                     }
                 }
                 
-                // Generate new background
-                console.log('Generating new location-based background...');
-                window.locationBackground = await window.api.generateLocationBackground();
-                console.log('Location background ready');
+                console.log('Pre-generating location background...');
+                const bgData = await window.api.generateLocationBackground();
+                window.locationBackground = bgData.spritesheet;
+                window.locationBackgroundFrames = bgData.frames;
                 
-                // If game is already running, trigger background update
+                // Save to IndexedDB (AssetStorage)
+                if (window.assetStorage) {
+                    await window.assetStorage.setItem('location_background', bgData.spritesheet);
+                    await window.assetStorage.setItem('location_background_frames', JSON.stringify(bgData.frames));
+                    localStorage.setItem('location_background_meta', JSON.stringify({
+                        timestamp: Date.now(),
+                        version: 5,
+                        location: bgData.location || {}
+                    }));
+                }
+                
                 if (window.gameInstance && typeof window.gameInstance.updateBackground === 'function') {
-                    console.log('Game is running, updating background...');
                     window.gameInstance.updateBackground();
                 }
             } catch (error) {
-                console.warn('Could not generate location background:', error);
-                // Continue without location background - game will use default
+                console.error('Pre-generation of background failed:', error);
             }
         };
 
-        // Initialize on page load - start background generation immediately if key is available
+        // Function to pre-generate level tiles (platforms, treats, bones)
+        window.generateLevelTilesPreload = async function() {
+            if (!window.api || !window.api.apiKey) return;
+
+            try {
+                // Check cache
+                if (localStorage.getItem('level_tiles_v1')) {
+                    console.log('Level tiles already cached.');
+                    return;
+                }
+                
+                console.log('Pre-generating level tiles (platform, treat, bone)...');
+                const theme = (window.LEVELS && window.LEVELS[0]) ? window.LEVELS[0].theme : 'Sunny Meadow';
+                const tiles = await window.api.generateLevelTiles(theme);
+                
+                if (window.assetStorage) {
+                    await window.assetStorage.setItem('level_tiles_v1', JSON.stringify(tiles));
+                    localStorage.setItem('has_level_tiles', 'true'); // Small flag for quick check
+                } else {
+                    localStorage.setItem('level_tiles_v1', JSON.stringify(tiles));
+                }
+                console.log(`Level tiles pre-generated and cached for theme: ${theme}`);
+            } catch (error) {
+                console.error('Pre-generation of level tiles failed:', error);
+            }
+        };
+
+        // Function to pre-generate enemy sprites (Cat)
+        window.generateEnemySpritesPreload = async function() {
+            if (!window.api || !window.api.apiKey) return;
+
+            try {
+                // Check cache
+                if (window.assetStorage) {
+                    const cachedCat = await window.assetStorage.getItem('enemy_cat_spritesheet');
+                    if (cachedCat) {
+                        console.log('Cat enemy sprites already cached in AssetStorage.');
+                        window.catEnemySpriteSheet = cachedCat;
+                        return;
+                    }
+                } else if (localStorage.getItem('enemy_cat_spritesheet')) {
+                    console.log('Cat enemy sprites already cached in localStorage.');
+                    window.catEnemySpriteSheet = localStorage.getItem('enemy_cat_spritesheet');
+                    return;
+                }
+                
+                console.log('Pre-generating cat enemy spritesheet...');
+                const spriteUrl = await window.api.generateEnemySpriteSheet('cat');
+                window.catEnemySpriteSheet = spriteUrl;
+                
+                if (window.assetStorage) {
+                    await window.assetStorage.setItem('enemy_cat_spritesheet', spriteUrl);
+                } else {
+                    localStorage.setItem('enemy_cat_spritesheet', spriteUrl);
+                }
+                console.log('Cat enemy spritesheet pre-generated and cached.');
+            } catch (error) {
+                console.error('Pre-generation of enemy sprites failed:', error);
+            }
+        };
+
+        // Unified pre-generation call
+        window.preGenerateGameAssets = async function() {
+            console.log('Starting game asset pre-generation...');
+            // Run in parallel
+            Promise.all([
+                window.generateLocationBackground(),
+                window.generateLevelTilesPreload(),
+                window.generateEnemySpritesPreload()
+            ]).then(() => {
+                console.log('Asset pre-generation complete or skipped due to cache.');
+            });
+        };
+
+        // Initialize on page load
         if (typeof window !== 'undefined') {
             window.addEventListener('DOMContentLoaded', async () => {
-                console.log('Page loaded, checking for API key...');
+                console.log('Page loaded, checking for cached assets...');
                 
-                // Check if we have a cached background first (fast path)
+                // 1. Initial background load from cache
+                // 1b. Initial enemy sprite load from cache
+                if (window.assetStorage) {
+                    window.assetStorage.getItem('enemy_cat_spritesheet').then(cachedCat => {
+                        if (cachedCat) window.catEnemySpriteSheet = cachedCat;
+                    });
+                } else {
+                    const cachedCat = localStorage.getItem('enemy_cat_spritesheet');
+                    if (cachedCat) window.catEnemySpriteSheet = cachedCat;
+                }
+
                 const cachedMeta = localStorage.getItem('location_background_meta');
-                const cachedBg = localStorage.getItem('location_background');
-                
-                if (cachedMeta && cachedBg) {
-                    const meta = JSON.parse(cachedMeta);
-                    const cacheVersion = meta.version || 1;
-                    const age = Date.now() - meta.timestamp;
-                    const hoursOld = age / (1000 * 60 * 60);
-                    
-                    if (hoursOld < 24 && cacheVersion >= 2) {
-                        console.log('Using cached location background (age:', hoursOld.toFixed(1), 'hours, version:', cacheVersion, ')');
-                        window.locationBackground = cachedBg;
-                        return; // Background ready, no need to generate
+                if (cachedMeta) {
+                    try {
+                        const meta = JSON.parse(cachedMeta);
+                        if ((meta.version || 0) >= 5) {
+                            if (window.assetStorage) {
+                                const cachedBg = await window.assetStorage.getItem('location_background');
+                                const cachedFramesStr = await window.assetStorage.getItem('location_background_frames');
+                                if (cachedBg) window.locationBackground = cachedBg;
+                                if (cachedFramesStr) window.locationBackgroundFrames = JSON.parse(cachedFramesStr);
+                                console.log('Background loaded from AssetStorage (IndexedDB)');
+                            } else {
+                                const cachedBg = localStorage.getItem('location_background');
+                                const cachedFrames = localStorage.getItem('location_background_frames');
+                                if (cachedBg) window.locationBackground = cachedBg;
+                                if (cachedFrames) window.locationBackgroundFrames = JSON.parse(cachedFrames);
+                            }
+                        }
+                    } catch (e) {
+                         console.warn('Could not load background from cache:', e);
                     }
                 }
                 
-                // If no valid cache, check if we have an API key and start generation immediately
+                // 2. Check if we have an API key and start pre-generation for missing/old assets
                 const savedKey = localStorage.getItem('gemini_api_key');
                 if (savedKey && window.api) {
-                    // Key exists, verify it and start background generation
-                    console.log('API key found, verifying and starting background generation...');
-                    // updateApiKeyStatus will verify and trigger generateLocationBackground
+                    console.log('API key found, checking if assets need pre-generation...');
                     if (window.updateApiKeyStatus) {
-                        window.updateApiKeyStatus();
+                        window.updateApiKeyStatus(); // This will trigger preGenerateGameAssets if key is valid
                     }
                 } else {
-                    console.log('No API key found, background generation will start when key is set');
+                    console.log('No API key found, asset generation will start when key is set');
                 }
             });
         }

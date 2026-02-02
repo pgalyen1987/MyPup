@@ -10,11 +10,9 @@ class CharacterManager {
 
     setupEventListeners() {
         const uploadInput = document.getElementById('dog-image-upload');
-        const generateBtn = document.getElementById('generate-sprite-btn');
         const startBtn = document.getElementById('start-game-btn');
 
         uploadInput.addEventListener('change', (e) => this.handleImageUpload(e));
-        generateBtn.addEventListener('click', () => this.generateSpriteSheet());
         startBtn.addEventListener('click', () => this.startGame());
     }
 
@@ -32,15 +30,12 @@ class CharacterManager {
         const preview = document.getElementById('upload-preview');
         const reader = new FileReader();
         
-        reader.onload = (e) => {
+        reader.onload = async (e) => {
             preview.innerHTML = `<img src="${e.target.result}" alt="Dog preview" class="pixelated">`;
             this.uploadedImage = e.target.result;
-            document.getElementById('generate-sprite-btn').disabled = false;
-            const statusEl = document.getElementById('generation-status');
-            if (statusEl) {
-                statusEl.textContent = 'Image uploaded! Click "Generate Sprite Sheet" to create your custom character.';
-                statusEl.style.color = '#4CAF50';
-            }
+            
+            // Automatically start sprite sheet generation
+            await this.generateSpriteSheet();
         };
 
         reader.readAsDataURL(file);
@@ -48,28 +43,34 @@ class CharacterManager {
 
     async generateSpriteSheet() {
         if (!this.uploadedImage) {
-            alert('Please upload an image first');
             return;
         }
 
         const statusEl = document.getElementById('generation-status');
-        const generateBtn = document.getElementById('generate-sprite-btn');
+        const startBtn = document.getElementById('start-game-btn');
+        
+        // Disable start button and show loading
+        startBtn.disabled = true;
+        statusEl.innerHTML = '<div class="loader"></div> Analyzing your dog\'s features with Gemini AI...';
+        statusEl.style.color = '#ffd700';
         
         // Smart Caching Check
-        const savedImage = localStorage.getItem('original_dog_image');
-        const savedSprite = localStorage.getItem('custom_sprite_sheet');
+        let savedImage, savedSprite;
+        if (window.assetStorage) {
+            savedImage = await window.assetStorage.getItem('original_dog_image');
+            savedSprite = await window.assetStorage.getItem('custom_sprite_sheet');
+        } else {
+            savedImage = localStorage.getItem('original_dog_image');
+            savedSprite = localStorage.getItem('custom_sprite_sheet');
+        }
         
         // If the uploaded image matches the saved one, and we have a sprite, use it!
         if (this.uploadedImage === savedImage && savedSprite) {
             console.log('Using cached sprite sheet for identical image.');
             this.currentSpriteSheet = savedSprite;
-            this.updatePreviewAndUI(savedSprite, '✓ Using cached sprite sheet (no API call needed). Click "Start Game".');
+            await this.checkReadyState();
             return;
         }
-
-        generateBtn.disabled = true;
-        statusEl.textContent = 'Analyzing your dog\'s features with Gemini AI...';
-        statusEl.style.color = '#ffd700';
 
         try {
             // Convert image to base64 if needed
@@ -87,16 +88,24 @@ class CharacterManager {
             // Load and validate sprite sheet
             this.currentSpriteSheet = spriteSheetUrl;
             
-            // Store in localStorage for persistence
+            // Store in IndexedDB (AssetStorage) for persistence
             try {
-                localStorage.setItem('custom_sprite_sheet', spriteSheetUrl);
-                localStorage.setItem('original_dog_image', this.uploadedImage);
+                if (window.assetStorage) {
+                    await window.assetStorage.setItem('custom_sprite_sheet', spriteSheetUrl);
+                    await window.assetStorage.setItem('original_dog_image', this.imageBase64 || this.uploadedImage);
+                    localStorage.setItem('has_custom_character', 'true');
+                } else {
+                    localStorage.setItem('custom_sprite_sheet', spriteSheetUrl);
+                    localStorage.setItem('original_dog_image', this.uploadedImage);
+                }
             } catch (storageError) {
-                console.warn('Failed to save to localStorage (likely too big):', storageError);
-                statusEl.textContent += ' (Warning: Sprite too large to cache, but game will work)';
+                console.warn('Failed to save character to storage:', storageError);
+                statusEl.textContent += ' (Warning: Could not cache character, but game will work)';
             }
             
-            this.updatePreviewAndUI(spriteSheetUrl, '✓ Sprite sheet generated successfully! Click "Start Game" to play.');
+            // Update preview and check if ready to start
+            this.updatePreview(spriteSheetUrl);
+            await this.checkReadyState();
 
         } catch (error) {
             console.error('Error generating sprite sheet:', error);
@@ -185,11 +194,13 @@ class CharacterManager {
                 statusEl.appendChild(testBtn);
             }
             
-            generateBtn.disabled = false;
+            // Keep start button disabled on error
+            const startBtn = document.getElementById('start-game-btn');
+            startBtn.disabled = true;
         }
     }
 
-    updatePreviewAndUI(spriteUrl, statusMessage) {
+    updatePreview(spriteUrl) {
         // Show preview
         const preview = document.getElementById('upload-preview');
         preview.innerHTML = `
@@ -198,13 +209,43 @@ class CharacterManager {
                 <p style="margin-top: 10px; font-size: 0.9em;">Sprite Sheet Ready!</p>
             </div>
         `;
+    }
 
+    async checkReadyState() {
         const statusEl = document.getElementById('generation-status');
-        statusEl.textContent = statusMessage;
-        statusEl.style.color = '#4CAF50';
+        const startBtn = document.getElementById('start-game-btn');
         
-        document.getElementById('start-game-btn').disabled = false;
-        document.getElementById('generate-sprite-btn').disabled = false;
+        // Check if sprite sheet is ready
+        if (!this.currentSpriteSheet) {
+            statusEl.innerHTML = '<div class="loader"></div> Generating sprite sheet...';
+            statusEl.style.color = '#ffd700';
+            startBtn.disabled = true;
+            return;
+        }
+        
+        // Check if background is ready
+        let backgroundReady = false;
+        if (window.assetStorage) {
+            const bg = await window.assetStorage.getItem('location_background');
+            backgroundReady = !!bg;
+        } else {
+            backgroundReady = !!localStorage.getItem('location_background');
+        }
+        
+        if (!backgroundReady) {
+            statusEl.innerHTML = '<div class="loader"></div> Waiting for background to be ready...';
+            statusEl.style.color = '#ffd700';
+            startBtn.disabled = true;
+            
+            // Wait a bit and check again (background might be generating)
+            setTimeout(() => this.checkReadyState(), 1000);
+            return;
+        }
+        
+        // Both are ready!
+        statusEl.textContent = '✓ Ready to play! Click "Start Game" to begin.';
+        statusEl.style.color = '#4CAF50';
+        startBtn.disabled = false;
     }
 
     async startGame() {
@@ -256,9 +297,15 @@ class CharacterManager {
         }
     }
 
-    loadSavedCharacter() {
-        const savedSprite = localStorage.getItem('custom_sprite_sheet');
-        const savedImage = localStorage.getItem('original_dog_image');
+    async loadSavedCharacter() {
+        let savedSprite, savedImage;
+        if (window.assetStorage) {
+            savedSprite = await window.assetStorage.getItem('custom_sprite_sheet');
+            savedImage = await window.assetStorage.getItem('original_dog_image');
+        } else {
+            savedSprite = localStorage.getItem('custom_sprite_sheet');
+            savedImage = localStorage.getItem('original_dog_image');
+        }
         
         if (savedSprite) {
             this.currentSpriteSheet = savedSprite;
@@ -269,16 +316,19 @@ class CharacterManager {
                 preview.innerHTML = `<img src="${savedImage}" alt="Dog preview" class="pixelated">`;
             }
             
-            document.getElementById('start-game-btn').disabled = false;
-            document.getElementById('generation-status').textContent = 'Previous character loaded. You can start the game or upload a new image.';
+            // Check if ready to start
+            await this.checkReadyState();
+        } else {
+            // No saved character, ensure start button is disabled
+            document.getElementById('start-game-btn').disabled = true;
         }
     }
 }
 
 // Initialize character manager when DOM is ready
 if (typeof window !== 'undefined') {
-    window.addEventListener('DOMContentLoaded', () => {
+    window.addEventListener('DOMContentLoaded', async () => {
         window.characterManager = new CharacterManager();
-        window.characterManager.loadSavedCharacter();
+        await window.characterManager.loadSavedCharacter();
     });
 }

@@ -55,6 +55,37 @@ class APIService {
     }
 
     /**
+     * Resize a base64 image using canvas
+     */
+    async resizeImage(base64Str, maxWidth, maxHeight) {
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.src = base64Str;
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                let width = img.width;
+                let height = img.height;
+
+                if (width > maxWidth) {
+                    height = Math.round((height * maxWidth) / width);
+                    width = maxWidth;
+                }
+                if (height > maxHeight) {
+                    width = Math.round((width * maxHeight) / height);
+                    height = maxHeight;
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, width, height);
+                resolve(canvas.toDataURL('image/png', 0.8));
+            };
+            img.onerror = (e) => reject(new Error('Image load failed'));
+        });
+    }
+
+    /**
      * Analyze dog image using Gemini 3 API and create a detailed prompt for sprite generation
      */
     async analyzeDogImageAndCreatePrompt(imageBase64) {
@@ -82,23 +113,16 @@ class APIService {
                         contents: [{
                             parts: [
                                 {
-                                    text: `Analyze this dog image and describe it for a retro sprite artist.
+                                    text: `Analyze this dog image and describe its core visual traits for a 16-bit retro sprite artist.
                                     
-                                    Output format:
-                                    1. Main visual features (breed, color, markings).
-                                    2. A strict image generation prompt for a sprite sheet.
+                                    Focus exclusively on:
+                                    - Breed/Type and Body Shape
+                                    - Primary and Secondary Colors
+                                    - Distinctive Markings (spots, patches, ear color)
+                                    - Eyes and Expressions
+                                    - Any visible accessories (collar, bandana)
                                     
-                                    The prompt must create:
-                                    - A pixel art spritesheet (256x256 pixels total).
-                                    - 4x4 grid (16 frames).
-                                    - Frame size: 64x64 pixels.
-                                    - Rows:
-                                      1. Walk Right
-                                      2. Walk Left
-                                      3. Jump
-                                      4. Idle
-                                    - Style: 16-bit Super Mario World style, vibrant, cute.
-                                    - Background: Transparent (or solid color if transparent not supported, will remove later).`
+                                    KEEP IT CONCISE. This description will be used in an image generation prompt.`
                                 },
                                 {
                                     inline_data: {
@@ -138,21 +162,30 @@ class APIService {
             
             const analysis = data.candidates[0].content.parts[0].text;
             
-            // Extract a refined prompt from the analysis or just append the requirement
-            // For now, we'll construct a strong prompt using the analysis
-            const spritePrompt = `Create a pixel art sprite sheet of a dog based on this description: ${analysis}
+            // Construct a highly rigid structural prompt
+            const tileSize = CONFIG.TILE_SIZE;
+            const spriteSheetSize = tileSize * 4; // 4x4 grid
+            const spritePrompt = `TITLE: 16-bit Retro Dog Spritesheet
+CHARACTER DESCRIPTION: ${analysis}
+STYLE: SNES-era pixel art, vibrant colors, clean outlines, 16-bit aesthetic.
 
-            Important Constraints:
-            - Image Size: 256x256 pixels.
-            - Grid: 4x4 (4 rows, 4 columns). Each cell is 64x64 pixels.
-            - Style: 16-bit retro platformer (Nintendo SNES style).
-            - Row 1: Walking Right animation (4 frames).
-            - Row 2: Walking Left animation (4 frames).
-            - Row 3: Jumping animation (4 frames).
-            - Row 4: Idle animation (4 frames).
-            - Background: solid lime green color background.
-            - The dog must be clear, readable, and cute.
-            - If they have clothing or accessories, they must be consistent across all frames.`;
+IMAGE STRUCTURE:
+- Total Canvas Size: ${spriteSheetSize}x${spriteSheetSize} pixels.
+- Layout: EXACT 4x4 grid of character poses (16 sprites total).
+- Cell Size: Each sprite must be contained within a ${tileSize}x${tileSize} pixel square.
+- ALIGNMENT: 
+  - Every sprite must be PIXEL-PERFECTLY CENTERED horizontally in its ${tileSize}x${tileSize} cell.
+  - Every sprite must have the same vertical baseline (feet touching the same Y-level in every cell).
+  - Row 1: Walk Right (4 frames)
+  - Row 2: Walk Left (4 frames)
+  - Row 3: Jump (4 frames)
+  - Row 4: Idle/Sitting (4 frames)
+
+CRITICAL CONSTRAINTS:
+- BACKGROUND: Solid, uniform lime green (#00ff00) background ONLY.
+- NO shadows, NO floor, NO grid lines.
+- The character must remain perfectly consistent in size, features, and colors across all 16 frames.
+- Ensure the character occupies roughly ${Math.round(tileSize * 0.625)}-${Math.round(tileSize * 0.78125)} pixels of height within the ${tileSize}px cell.`;
 
             return spritePrompt;
         } catch (error) {
@@ -187,9 +220,9 @@ class APIService {
                         // However, standard Imagen on Vertex/Gemini usually returns base64 in a specific field.
                         // Let's assume standard generateContent response with inline data if the model supports it.
                         generationConfig: {
-                            temperature: 0.4,
-                            topK: 32,
-                            topP: 0.95,
+                            temperature: 0.2,
+                            topK: 16,
+                            topP: 0.9,
                             maxOutputTokens: 8192,
                         }
                     })
@@ -229,6 +262,80 @@ class APIService {
             
         } catch (error) {
             console.error('Error generating sprite sheet:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Generate an enemy spritesheet (e.g., Cat) using the same 4x4 grid as the dog
+     */
+    async generateEnemySpriteSheet(enemyType = 'cat') {
+        try {
+            console.log(`Generating ${enemyType} enemy spritesheet...`);
+            
+            const tileSize = CONFIG.TILE_SIZE;
+            const spriteSheetSize = tileSize * 4; // 4x4 grid
+            const enemyPrompt = `TITLE: 16-bit Retro ${enemyType.toUpperCase()} Enemy Spritesheet
+CHARACTER DESCRIPTION: A cool, slightly mischievous ${enemyType} for a platformer enemy. 
+STYLE: SNES-era pixel art, vibrant colors, clean outlines, 16-bit aesthetic.
+
+IMAGE STRUCTURE:
+- Total Canvas Size: ${spriteSheetSize}x${spriteSheetSize} pixels.
+- Layout: EXACT 4x4 grid of character poses (16 sprites total).
+- Cell Size: Each sprite must be contained within a ${tileSize}x${tileSize} pixel square.
+- ALIGNMENT: 
+  - Every sprite must be PIXEL-PERFECTLY CENTERED horizontally in its ${tileSize}x${tileSize} cell.
+  - Every sprite must have the same vertical baseline (feet touching the same Y-level in every cell).
+  - Row 1: Walk Right (4 frames)
+  - Row 2: Walk Left (4 frames)
+  - Row 3: Jump/Attack (4 frames)
+  - Row 4: Idle (4 frames)
+
+CRITICAL CONSTRAINTS:
+- BACKGROUND: Solid, uniform lime green (#00ff00) background ONLY.
+- NO shadows, NO floor, NO grid lines.
+- The character must remain perfectly consistent across all 16 frames.`;
+
+            const response = await fetch(
+                `${CONFIG.GEMINI_IMAGE_GEN_URL}?key=${this.apiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [{ text: enemyPrompt }]
+                        }],
+                        generationConfig: {
+                            temperature: 0.3,
+                            topK: 16,
+                            topP: 0.9,
+                            maxOutputTokens: 8192,
+                        }
+                    })
+                }
+            );
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw this.parseApiError(errorText, response.status);
+            }
+
+            const data = await response.json();
+            const candidate = data.candidates?.[0];
+            if (!candidate) throw new Error('No candidates returned for enemy sprite');
+
+            for (const part of candidate.content.parts) {
+                if (part.inline_data || part.inlineData) {
+                    const inline = part.inline_data || part.inlineData;
+                    const rawBase64 = `data:${inline.mime_type || inline.mimeType};base64,${inline.data}`;
+                    return await this.removeSolidBackground(rawBase64);
+                }
+            }
+
+            throw new Error('No image data found in enemy sprite response');
+            
+        } catch (error) {
+            console.error('Error generating enemy sprite sheet:', error);
             throw error;
         }
     }
@@ -296,7 +403,7 @@ class APIService {
                 
                 console.log(`Background color detected: RGB(${avgR}, ${avgG}, ${avgB}) from ${sampleColors.length} samples`);
 
-                // Primary method: Detect green/lime green colors (chroma key)
+                // Primary method: Detect green/lime green colors (chroma key) and magenta (#ff00ff)
                 const isGreenColor = (r, g, b) => {
                     // Lime green is typically high green, low red, low blue
                     // Check if green is the dominant channel
@@ -318,6 +425,19 @@ class APIService {
                     return isLimeGreen || isPureGreen;
                 };
                 
+                // Detect magenta color (#ff00ff = RGB(255, 0, 255))
+                const isMagentaColor = (r, g, b) => {
+                    // Magenta is high red, low green, high blue
+                    // #ff00ff = RGB(255, 0, 255)
+                    const isMagenta = r > 200 && b > 200 && g < 50;
+                    // Also check for close matches with tolerance
+                    const redBlueHigh = r > 150 && b > 150;
+                    const greenLow = g < 100;
+                    const isCloseMagenta = redBlueHigh && greenLow && Math.abs(r - b) < 50;
+                    
+                    return isMagenta || isCloseMagenta;
+                };
+                
                 // Secondary method: Check against average background color
                 const tolerance = 80;
                 const toleranceSquared = tolerance * tolerance;
@@ -335,8 +455,53 @@ class APIService {
                            y < edgeDistance || y >= height - edgeDistance;
                 };
 
+                // Method 1: Flood fill background removal to preserve internal colors
+                // This starts from the corners and removes only connected background pixels
+                const visited = new Uint8Array(width * height);
+                const stack = [...corners, ...edgeSamples];
                 let removedCount = 0;
-                let greenRemoved = 0;
+                
+                const colorDist = (r1, g1, b1, r2, g2, b2) => {
+                    return Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+                };
+
+                const fillTolerance = 120; // Slightly higher tolerance for flood fill
+                
+                while (stack.length > 0) {
+                    const { x, y } = stack.pop();
+                    if (x < 0 || x >= width || y < 0 || y >= height) continue;
+                    
+                    const pos = y * width + x;
+                    if (visited[pos]) continue;
+                    visited[pos] = 1;
+
+                    const i = pos * 4;
+                    const r = data[i];
+                    const g = data[i + 1];
+                    const b = data[i + 2];
+                    
+                    // If this pixel is similar to the detected background or is pure lime green/magenta
+                    const isBg = colorDist(r, g, b, avgR, avgG, avgB) < fillTolerance || 
+                                 (g > 200 && r < 100 && b < 100) || // Lime Green
+                                 (r > 200 && b > 200 && g < 100);   // Magenta
+
+                    if (isBg) {
+                        data[i + 3] = 0; // Make transparent
+                        removedCount++;
+                        
+                        // Add neighbors
+                        stack.push({ x: x + 1, y });
+                        stack.push({ x: x - 1, y });
+                        stack.push({ x, y: y + 1 });
+                        stack.push({ x, y: y - 1 });
+                    }
+                }
+                
+                console.log(`Flood fill removed ${removedCount} background pixels (${((removedCount / (width * height)) * 100).toFixed(1)}% of image)`);
+                
+                // Method 2: Pass through entire image to remove any remaining green/magenta pixels
+                // This catches isolated green pixels that weren't connected to edges
+                let additionalRemoved = 0;
                 for (let y = 0; y < height; y++) {
                     for (let x = 0; x < width; x++) {
                         const i = (y * width + x) * 4;
@@ -344,61 +509,33 @@ class APIService {
                         const g = data[i + 1];
                         const b = data[i + 2];
                         const a = data[i + 3];
-
+                        
                         // Skip if already transparent
                         if (a === 0) continue;
-
-                        // PRIMARY: Check if it's a green/lime green color (chroma key)
-                        const isGreen = isGreenColor(r, g, b);
-                        if (isGreen) {
-                            data[i + 3] = 0;
-                            removedCount++;
-                            greenRemoved++;
-                            continue;
-                        }
-
-                        // SECONDARY: Check against average background color
-                        const dr = r - avgR;
-                        const dg = g - avgG;
-                        const db = b - avgB;
-                        const distanceSquared = dr * dr + dg * dg + db * db;
-                        const channelMatch = (
-                            Math.abs(r - avgR) < tolerance &&
-                            Math.abs(g - avgG) < tolerance &&
-                            Math.abs(b - avgB) < tolerance
-                        );
-
-                        // TERTIARY: Check if it's a light grey/white background color
-                        const isLightBackground = isLightColor(r, g, b);
                         
-                        // QUATERNARY: Check if color is very close to any of the corner samples
-                        let matchesCorner = false;
-                        for (const sample of sampleColors) {
-                            const sampleDr = r - sample.r;
-                            const sampleDg = g - sample.g;
-                            const sampleDb = b - sample.b;
-                            const sampleDist = Math.sqrt(sampleDr * sampleDr + sampleDg * sampleDg + sampleDb * sampleDb);
-                            if (sampleDist < tolerance) {
-                                matchesCorner = true;
-                                break;
-                            }
-                        }
+                        // More aggressive green detection - catch #00ff00 and variations
+                        // Lime green (#00ff00 = RGB(0, 255, 0)) or close variations
+                        const isLimeGreen = (g > 200 && r < 150 && b < 150) || // Bright green, low red/blue
+                                          (g > r * 2 && g > b * 2 && g > 150); // Green dominates significantly
                         
-                        // QUINARY: If near edge and matches background characteristics, remove it
-                        const nearEdge = isNearEdge(x, y, 10);
-                        const edgeMatch = nearEdge && (channelMatch || isLightBackground);
-
-                        // Remove if it matches any criteria
-                        if (distanceSquared < toleranceSquared || channelMatch || isLightBackground || matchesCorner || edgeMatch) {
-                            data[i + 3] = 0;
-                            removedCount++;
+                        // Also check for pure green (#00ff00 exactly or very close)
+                        const isPureGreen = g > 240 && r < 50 && b < 50;
+                        
+                        // Magenta detection
+                        const isMagenta = (r > 200 && b > 200 && g < 100);
+                        
+                        // Check if pixel matches average background color (with tolerance)
+                        const matchesAvgBg = colorDist(r, g, b, avgR, avgG, avgB) < 100;
+                        
+                        if (isLimeGreen || isPureGreen || isMagenta || matchesAvgBg) {
+                            data[i + 3] = 0; // Make transparent
+                            additionalRemoved++;
                         }
                     }
                 }
                 
-                console.log(`Removed ${removedCount} background pixels (${((removedCount / (width * height)) * 100).toFixed(1)}% of image)`);
-                console.log(`  - ${greenRemoved} green/lime green pixels removed (chroma key)`);
-                console.log(`  - ${removedCount - greenRemoved} other background pixels removed`);
+                console.log(`Additional pass removed ${additionalRemoved} more background pixels`);
+                console.log(`Total removed: ${removedCount + additionalRemoved} pixels (${(((removedCount + additionalRemoved) / (width * height)) * 100).toFixed(1)}% of image)`);
 
                 ctx.putImageData(imgData, 0, 0);
                 resolve(canvas.toDataURL('image/png'));
@@ -504,7 +641,7 @@ class APIService {
     }
 
     /**
-     * Generate individual 32x32 tiles for procedural level rendering
+     * Generate individual 64x64 tiles for procedural level rendering
      * Returns an object with base64 tile images: { treat, bone, platform }
      * 
      * NOTE: Only generates platform and collectible objects (treat, bone).
@@ -521,8 +658,9 @@ class APIService {
             
             // Generate platform tile (POST call #1)
             console.log('POST #1: Generating platform tile...');
+            const tileSize = CONFIG.TILE_SIZE;
             tiles.platform = await this.generateSingleTile(
-                `Generate a single 32x32 pixel art tile of a FLOATING PLATFORM for a platformer game.
+                `Generate a single ${tileSize}x${tileSize} pixel art tile of a FLOATING PLATFORM for a platformer game.
                 Style: 16-bit Super Mario World style.
                 Theme: ${theme}
                 The tile should show: a stone or wooden platform block with grass on top.
@@ -533,7 +671,7 @@ class APIService {
             // Generate treat/collectible tile (POST call #2)
             console.log('POST #2: Generating treat tile...');
             tiles.treat = await this.generateSingleTile(
-                `Generate a single 32x32 pixel art tile of a DOG TREAT collectible item.
+                `Generate a single ${tileSize}x${tileSize} pixel art tile of a DOG TREAT collectible item.
                 Style: 16-bit pixel art, cute and colorful.
                 Theme: ${theme}
                 The tile should show: a golden/orange dog biscuit or bone-shaped treat.
@@ -544,7 +682,7 @@ class APIService {
             // Generate bone/goal tile (POST call #3)
             console.log('POST #3: Generating bone tile...');
             tiles.bone = await this.generateSingleTile(
-                `Generate a single 32x32 pixel art tile of a LARGE BONE (goal item).
+                `Generate a single ${tileSize}x${tileSize} pixel art tile of a LARGE BONE (goal item).
                 Style: 16-bit pixel art, shiny and important-looking.
                 The tile should show: a white/cream colored dog bone, slightly glowing or sparkly.
                 Transparent background.
@@ -561,7 +699,7 @@ class APIService {
     }
     
     /**
-     * Generate a single 32x32 tile
+     * Generate a single tile (size determined by CONFIG.TILE_SIZE)
      */
     async generateSingleTile(prompt) {
         const response = await fetch(
@@ -684,15 +822,11 @@ class APIService {
             else timeOfDay = 'night';
 
             // Determine season based on month and hemisphere
-            // Northern hemisphere: Dec-Feb=winter, Mar-May=spring, Jun-Aug=summer, Sep-Nov=fall
-            // Southern hemisphere: reversed
             const month = now.toLocaleString('en-US', { 
                 timeZone: location.timezone,
                 month: 'numeric'
             });
             const monthNum = parseInt(month) || 1;
-            
-            // Simple hemisphere detection based on latitude (northern > 0, southern < 0)
             const isNorthern = (location.latitude || 0) >= 0;
             let season;
             
@@ -702,18 +836,73 @@ class APIService {
                 else if (monthNum >= 6 && monthNum <= 8) season = 'summer';
                 else season = 'fall';
             } else {
-                // Southern hemisphere - reversed
                 if (monthNum >= 12 || monthNum <= 2) season = 'summer';
                 else if (monthNum >= 3 && monthNum <= 5) season = 'fall';
                 else if (monthNum >= 6 && monthNum <= 8) season = 'winter';
                 else season = 'spring';
             }
 
+            // Step 2: Get real-time weather from Open-Meteo
+            let weatherReport = {
+                description: 'clear sky',
+                hasPrecipitation: false,
+                precipitationType: 'none',
+                weatherCode: 0
+            };
+
+            if (location.latitude && location.longitude) {
+                try {
+                    const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=weather_code,precipitation&timezone=auto`;
+                    const weatherResponse = await fetch(weatherUrl);
+                    if (weatherResponse.ok) {
+                        const weatherData = await weatherResponse.json();
+                        const code = weatherData.current.weather_code;
+                        const prec = weatherData.current.precipitation;
+                        
+                        weatherReport.weatherCode = code;
+                        weatherReport.hasPrecipitation = prec > 0;
+                        
+                        // Map WMO codes to descriptions
+                        if (code === 0) weatherReport.description = 'clear sky';
+                        else if (code <= 3) weatherReport.description = 'partly cloudy';
+                        else if (code >= 51 && code <= 67) {
+                            weatherReport.description = 'rainy';
+                            weatherReport.precipitationType = 'rain';
+                            weatherReport.hasPrecipitation = true;
+                        }
+                        else if (code >= 71 && code <= 77) {
+                            weatherReport.description = 'snowy';
+                            weatherReport.precipitationType = 'snow';
+                            weatherReport.hasPrecipitation = true;
+                        }
+                        else if (code >= 80 && code <= 82) {
+                            weatherReport.description = 'rain showers';
+                            weatherReport.precipitationType = 'rain';
+                            weatherReport.hasPrecipitation = true;
+                        }
+                        else if (code >= 85 && code <= 86) {
+                            weatherReport.description = 'snow showers';
+                            weatherReport.precipitationType = 'snow';
+                            weatherReport.hasPrecipitation = true;
+                        }
+                        else if (code >= 95) {
+                            weatherReport.description = 'stormy';
+                            weatherReport.precipitationType = 'rain';
+                            weatherReport.hasPrecipitation = true;
+                        }
+                        else weatherReport.description = 'cloudy';
+                    }
+                } catch (e) {
+                    console.warn('Could not fetch real-time weather, using location-based defaults:', e);
+                }
+            }
+
             return {
                 timeString,
                 timeOfDay,
                 hour: hourNum,
-                season
+                season,
+                weatherReport
             };
         } catch (error) {
             console.warn('Error getting time/weather:', error);
@@ -721,7 +910,8 @@ class APIService {
                 timeString: new Date().toLocaleTimeString(),
                 timeOfDay: 'day',
                 hour: 12,
-                season: 'spring'
+                season: 'spring',
+                weatherReport: { description: 'clear sky', hasPrecipitation: false, precipitationType: 'none' }
             };
         }
     }
@@ -731,74 +921,16 @@ class APIService {
      */
     async generateBackgroundPrompt(location, timeWeather) {
         try {
-            const prompt = `Based on this location and time information, create a detailed prompt for generating an ANIMATED pixel art background scene:
+            const weatherDesc = timeWeather.weatherReport?.description || (timeWeather.timeOfDay === 'night' ? 'clear night sky with stars' : 'appropriate for current location');
+            
+            const prompt = `Describe a beautiful, immersive landscape scene for a retro 16-bit platformer game background based on this real-world data:
 
-Location:
-- City: ${location.city}
-- Region/State: ${location.region}
-- Country: ${location.country}
-- Time: ${timeWeather.timeString} (${timeWeather.timeOfDay})
-- Season: ${timeWeather.season}
+Location: ${location.city}, ${location.region}, ${location.country}
+Time: ${timeWeather.timeString} (${timeWeather.timeOfDay})
+Season: ${timeWeather.season}
+Weather: ${weatherDesc}
 
-You must create a detailed, vivid image generation prompt that EXPLICITLY includes:
-
-1. SEASON: Clearly describe the season (${timeWeather.season}) - mention seasonal colors, foliage, weather patterns, etc.
-   - Spring: blooming flowers, green grass, mild weather
-   - Summer: lush vegetation, warm colors, bright skies
-   - Fall/Autumn: changing leaves, orange/red/brown colors, falling leaves
-   - Winter: snow, bare trees, cold atmosphere, winter weather
-
-2. TIME OF DAY: Clearly describe the time of day (${timeWeather.timeOfDay}) - mention lighting, sky colors, sun position, etc.
-
-3. WEATHER CONDITIONS: Describe the weather conditions appropriate for ${location.city}, ${location.region} at this time of year. Include details like:
-   - Sky conditions (clear, cloudy, overcast, etc.)
-   - Weather type (sunny, rainy, foggy, snowy, windy, etc.)
-   - Atmospheric effects (mist, rain, snow, clouds, wind, etc.)
-   - Temperature indicators (if relevant to visual appearance)
-   - ANIMATION HINTS: If rainy, mention rain animation. If snowy, mention snow falling. If windy, mention grass/leaves waving.
-
-4. LANDMARKS: Include specific, recognizable landmarks or unique features of ${location.city}, ${location.region}, ${location.country}. These could be:
-   - Famous buildings or structures
-   - Natural features (mountains, rivers, coastlines)
-   - City skyline characteristics
-   - Regional architectural styles
-   - Cultural or historical landmarks
-
-5. ANIMATION REQUIREMENTS: The background must be animated with 4 frames showing:
-   - Frame 1: Base state
-   - Frame 2: Animation state (rain falling, snow falling, grass/leaves waving in wind, clouds moving, etc.)
-   - Frame 3: Animation state (variation of frame 2)
-   - Frame 4: Return to base or slight variation
-   - Animation should be subtle and loop seamlessly
-   - If weather is rainy: show rain drops in different positions across frames
-   - If weather is snowy: show snowflakes falling at different positions
-   - If weather is windy: show grass, leaves, or flags waving/moving
-   - If weather is calm: show subtle cloud movement or gentle grass swaying
-
-The prompt should also:
-- Be suitable for a retro 16-bit platformer game background
-- Be seamlessly tileable horizontally (left and right edges match perfectly)
-- Have a consistent pixel art style throughout
-- Include sky, distant landmarks, and ground elements
-- Generate 4 frames of animation in a single spritesheet: 4 tiles wide x 1 tile tall
-- Each frame should be 400 tiles wide x 14 tiles tall (12800x448 pixels at 32px per tile)
-- Total spritesheet size: 51200 pixels wide x 448 pixels tall (4 frames x 12800 pixels each)
-
-IMPORTANT RESTRICTIONS:
-- DO NOT include any text signs, labels, or written text in the image
-- DO NOT include signs with the city name (${location.city})
-- DO NOT include signs with the time (${timeWeather.timeString} or ${timeWeather.timeOfDay})
-- DO NOT include any text, words, numbers, or letters anywhere in the scene
-- The scene should be purely visual with no written elements
-
-CRITICAL: Your output must be a complete, ready-to-use image generation prompt that explicitly mentions:
-- The season with visual details
-- The time of day with visual details (but NO text signs showing the time)
-- The weather conditions with atmospheric details and animation hints
-- Specific landmarks or features of ${location.city} (but NO text signs with the city name)
-- The 4-frame animation sequence requirements
-
-Output ONLY the image generation prompt text, nothing else. Do not include explanations or markdown formatting.`;
+Include giant, highly recognizable visual landmarks and iconic features from ${location.city} (architectural, historical, or natural). Describe these landmarks in large, crisp detail so they are the focal point of the background. The scene must feel uniquely and immediately identifiable as ${location.city}. Do not include any text or signs. Description should be vivid for a 16-bit SNES style.`;
 
             const response = await fetch(
                 `${CONFIG.GEMINI_API_URL}?key=${this.apiKey}`,
@@ -825,6 +957,14 @@ Output ONLY the image generation prompt text, nothing else. Do not include expla
             const data = await response.json();
             
             if (!data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                console.warn('Gemini API did not return text for background prompt. Full response:', JSON.stringify(data));
+                
+                // Check for safety refusal
+                if (data.candidates?.[0]?.finishReason === 'SAFETY') {
+                    console.warn('Safety refusal detected. Retrying with a more generic prompt...');
+                    return `A beautiful SNES-era pixel art landscape of a city with a historic and natural feel, suitable for ${location.city}.`;
+                }
+                
                 throw new Error('Invalid response from Gemini API for background prompt');
             }
             
@@ -841,103 +981,256 @@ Output ONLY the image generation prompt text, nothing else. Do not include expla
     }
 
     /**
-     * Generate the actual background image using the prompt (returns 4 animated frames)
+     * Generate the actual background image using the prompt (returns 4 animated frames combined into spritesheet)
+     * Each frame is 1024x1024, combined into a 4096x1024 spritesheet (4 frames horizontally)
      */
-    async generateBackgroundImage(prompt) {
+    async generateBackgroundImage(prompt, timeWeather = null) {
         try {
-            // Enhance prompt with specific requirements for 4-frame animation spritesheet
-            const enhancedPrompt = `${prompt}
-
-CRITICAL REQUIREMENTS FOR 4-FRAME ANIMATED SPRITESHEET:
-- Image size: exactly 51200 pixels wide x 448 pixels tall
-- This is a spritesheet with 4 animation frames arranged horizontally
-- Frame 1: Position 0-12799 pixels (0-12799px from left)
-- Frame 2: Position 12800-25599 pixels (12800-25599px from left)
-- Frame 3: Position 25600-38399 pixels (25600-38399px from left)
-- Frame 4: Position 38400-51199 pixels (38400-51199px from left)
-- Each frame is exactly 12800 pixels wide x 448 pixels tall (400 tiles x 14 tiles at 32px per tile)
-- Each frame should be seamlessly tileable horizontally (left and right edges match)
-- Animation should loop seamlessly: Frame 4 should transition smoothly back to Frame 1 when tiled
-- Include sky, distant landmarks/buildings, and ground elements in each frame
-- Animation elements (rain, snow, wind effects) should vary across the 4 frames to create smooth animation
-
-ANIMATION GUIDELINES:
-- Rain: Show rain drops at different vertical positions across the 4 frames
-- Snow: Show snowflakes at different positions, creating a falling effect
-- Wind: Show grass, leaves, or flags in different positions to simulate movement
-- Clouds: Show clouds slightly shifted across frames
-- Calm: Show subtle variations like gentle grass swaying or cloud drift
-
-TEXT RESTRICTIONS (CRITICAL):
-- DO NOT include any text, signs, labels, or written words in the image
-- NO city name signs or labels
-- NO time displays, clocks, or time-related text
-- NO numbers, letters, or any written text anywhere in the scene
-- The image must be purely visual with zero text elements
-
-16-BIT RETRO STYLE REQUIREMENTS (CRITICAL):
-- Pixel art style, authentic 16-bit retro game aesthetic (Super Nintendo / Sega Genesis era)
-- Limited color palette typical of 16-bit games (256 colors max, but use fewer for authenticity)
-- No anti-aliasing or smooth gradients - use solid color blocks and dithering patterns
-- Sharp, pixelated edges - no blur or smoothing
-- Style reference: Super Mario World, Donkey Kong Country, Sonic the Hedgehog, or similar 16-bit platformer backgrounds
-- Use pixel-perfect rendering with clear, distinct pixels
-- Background layers should have depth but maintain the flat, layered look of 16-bit games
-- Colors should be vibrant but within the 16-bit color range (no modern high-color gradients)
-- Use dithering patterns for color transitions if needed (checkerboard or ordered dithering)
-- All elements must look hand-pixelated, not rendered or filtered`;
-
-            console.log('Generating background image with prompt:', enhancedPrompt);
-
-            const response = await fetch(
-                `${CONFIG.GEMINI_IMAGE_GEN_URL}?key=${this.apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [{ text: enhancedPrompt }]
-                        }],
-                        generationConfig: {
-                            temperature: 0.4,
-                            topK: 32,
-                            topP: 0.95,
-                            maxOutputTokens: 8192,
-                        }
-                    })
-                }
-            );
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw this.parseApiError(errorText, response.status);
-            }
-
-            const data = await response.json();
+            // Generate 8 separate frames for smoother animation and less jitter
+            const frameWidth = 512; 
+            const frameHeight = 512; 
+            const totalFrames = 8;
             
-            const candidate = data.candidates?.[0];
-            if (!candidate) throw new Error('No candidates returned');
-
-            for (const part of candidate.content.parts) {
-                if (part.inline_data || part.inlineData) {
-                    const inline = part.inline_data || part.inlineData;
-                    const rawBase64 = `data:${inline.mime_type || inline.mimeType};base64,${inline.data}`;
+            console.log(`Generating ${totalFrames}-frame animated background sequentially (512x512)...`);
+            
+            const frames = [];
+            let previousFrame = null;
+            
+            // Generate a random seed for this background set to improve frame consistency
+            const seed = Math.floor(Math.random() * 1000000);
+            console.log(`Using seed ${seed} for all frames in this background set.`);
+            
+            const hasPrecipitation = timeWeather?.weatherReport?.hasPrecipitation;
+            const precipitationType = timeWeather?.weatherReport?.precipitationType || 'rain';
+            
+            for (let i = 0; i < totalFrames; i++) {
+                const frameNum = i + 1;
+                let framePrompt;
+                
+                if (frameNum === 1) {
+                    // Initial frame: Description based on location, no size mention
+                    framePrompt = `A 16-bit retro pixel art landscape for a side-scrolling platformer background.
+                    Theme: ${prompt}
+                    Style: SNES-era pixel art, vibrant colors, dithered shading, clear layers.
                     
-                    console.log('Background image generated successfully');
-                    return rawBase64;
+                    SEAMLESS TILING PROTOCOL:
+                    - This image MUST tile horizontally perfectly.
+                    - The FAR LEFT edge and FAR RIGHT edge must match pixel-for-pixel so they connect seamlessly when placed side-by-side.
+                    - Do NOT cut large landmarks in half at the edges. Keep them fully contained or handle the cross-over perfectly.
+                    
+                    Composition:
+                    - Ensure recognizable landmarks from ${prompt} are HUGE and highly visible.
+                    - The scene should include sky, prominent iconic landmarks, and ground elements.
+                    ${hasPrecipitation ? `Weather effect: Show visible ${precipitationType} falling in the foreground and midground (pixel art ${precipitationType} streaks or flakes).` : ''}
+                    NO text, NO signs. This is the first frame of an animation loop.`;
+                } else {
+                    // Subsequent frames: Dual-reference for structure (Frame 1) and motion (Frame i-1)
+                    let animationText = '';
+                    const progress = ((frameNum - 1) / totalFrames * 100).toFixed(1);
+                    
+                    if (frameNum < totalFrames) {
+                        animationText = `This is frame ${frameNum} of ${totalFrames} (${progress}% through the loop). 
+                        Move clouds slightly further right than in the previous frame. Increase any swaying or rippling slightly.`;
+                    } else {
+                        animationText = `This is the FINAL frame (${progress}%). 
+                        It MUST lead perfectly back to Frame 1. 
+                        Clouds should be at their furthest position, such that the next step would be their exact position in Frame 1. 
+                        All swaying and rippling should be at a state that connects seamlessly back to the start of the loop.`;
+                    }
+                    
+                    if (hasPrecipitation) {
+                        const effect = precipitationType === 'snow' ? 'drift further down and across' : 'fall downward in progressive streaks';
+                        animationText += ` Also advance the ${precipitationType} animation so it cycles seamlessly.`;
+                    }
+
+                    framePrompt = `Generate frame ${frameNum} of an ${totalFrames}-frame SEAMLESS animation loop.
+                    You are provided with TWO images:
+                    1. The FIRST FRAME (Anchor): Use this to keep all buildings and landmarks pixel-perfect.
+                    2. The PREVIOUS FRAME (Continuity): Use this to ensure smooth, incremental motion.
+
+                    STABILITY PROTOCOL: 
+                    - All landmarks, buildings, and ground from the FIRST FRAME must remain in the EXACT same pixel positions. ZERO drift.
+                    
+                    SEAMLESS TILING PROTOCOL:
+                    - Maintain PERFECT horizontal tiling. The left edge MUST always match the right edge perfectly.
+                    - If a cloud or object moves off the RIGHT edge, it MUST reapppear exactly from the LEFT edge (wraparound).
+                    
+                    LOOPING INSTRUCTIONS:
+                    ${animationText}
+                    
+                    The resulting image must be 512x512 with the same SNES-era pixel art style.`;
                 }
                 
-                if (part.text && (part.text.includes("I cannot") || part.text.includes("Error"))) {
-                     throw new Error(`Model Refusal: ${part.text}`);
+                // Use first frame as anchor and previous frame for continuity
+                const referenceFrames = [];
+                if (frameNum > 1) {
+                    referenceFrames.push(frames[0]); // Frame 1 is always first
+                    if (frameNum > 2) {
+                        referenceFrames.push(frames[frames.length - 1]); // Previous frame is second
+                    }
                 }
+                
+                const currentFrame = await this.generateSingleFrame(framePrompt, frameNum, referenceFrames, seed);
+                frames.push(currentFrame);
+                
+                console.log(`Frame ${frameNum}/${totalFrames} generated successfully (References: ${referenceFrames.length}).`);
             }
 
-            throw new Error('No image data found in background response.');
+            console.log(`Successfully generated ${frames.length} background frames sequentially`);
+            
+            // Return the frames as an array - we'll cycle through them for animation
+            // Store as an object with frames array and metadata
+            const backgroundData = {
+                frames: frames, // Array of 4 base64 images
+                frameCount: frames.length,
+                frameWidth: frameWidth,
+                frameHeight: frameHeight
+            };
+            
+            // For backward compatibility, also store as a single combined image
+            // But the game will use the frames array for animation
+            const spritesheet = await this.combineFramesIntoSpritesheet(frames, frameWidth, frameHeight);
+            backgroundData.spritesheet = spritesheet; // Keep for fallback
+            
+            console.log(`Background frames ready: ${frames.length} separate ${frameWidth}x${frameHeight} images`);
+            
+            return backgroundData;
             
         } catch (error) {
             console.error('Error generating background image:', error);
             throw error;
         }
+    }
+    
+    /**
+     * Generate a single frame of the background animation
+     */
+    async generateSingleFrame(prompt, frameNumber, previousFrameBase64 = null, seed = null) {
+        console.log(`Generating background frame ${frameNumber}/4...`);
+        
+        // Prepare request body
+        const parts = [{ text: prompt }];
+        
+        // If we have reference frames, include them for image-to-image consistency
+        if (referenceFrames && referenceFrames.length > 0) {
+            referenceFrames.forEach((frameBase64, index) => {
+                if (!frameBase64) return;
+                
+                let base64Data = frameBase64;
+                if (frameBase64.includes(',')) {
+                    base64Data = frameBase64.split(',')[1];
+                }
+                
+                parts.push({
+                    inline_data: {
+                        mime_type: "image/png",
+                        data: base64Data
+                    }
+                });
+                console.log(`Including reference frame ${index + 1} in request for frame ${frameNumber}`);
+            });
+        }
+        
+        const response = await fetch(
+            `${CONFIG.GEMINI_IMAGE_GEN_URL}?key=${this.apiKey}`,
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    contents: [{
+                        parts: parts
+                    }],
+                    generationConfig: {
+                        temperature: 0.05,
+                        topK: 8,
+                        topP: 0.8,
+                        maxOutputTokens: 8192,
+                        ...(seed !== null && { seed: seed })
+                    }
+                })
+            }
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw this.parseApiError(errorText, response.status);
+        }
+
+        const data = await response.json();
+        
+        const candidate = data.candidates?.[0];
+        if (!candidate) throw new Error(`No candidates returned for frame ${frameNumber}`);
+
+        for (const part of candidate.content.parts) {
+            if (part.inline_data || part.inlineData) {
+                const inline = part.inline_data || part.inlineData;
+                const rawBase64 = `data:${inline.mime_type || inline.mimeType};base64,${inline.data}`;
+                
+                console.log(`Frame ${frameNumber}/4 generated successfully`);
+                return rawBase64;
+            }
+            
+            if (part.text && (part.text.includes("I cannot") || part.text.includes("Error"))) {
+                 throw new Error(`Model Refusal for frame ${frameNumber}: ${part.text}`);
+            }
+        }
+
+        throw new Error(`No image data found in frame ${frameNumber} response.`);
+    }
+    
+    /**
+     * Combine 4 frames into a single horizontal spritesheet
+     * Each frame from Gemini is 1024x1024, combined into 4096x1024 spritesheet
+     * Scaling to fit the view window happens in the game code when displaying
+     */
+    async combineFramesIntoSpritesheet(frameDataUrls, frameWidth, frameHeight) {
+        return new Promise((resolve, reject) => {
+            try {
+                // Create a canvas to combine the frames
+                const canvas = document.createElement('canvas');
+                canvas.width = frameWidth * frameDataUrls.length; // Dynamic width based on frame count
+                canvas.height = frameHeight;
+                const ctx = canvas.getContext('2d');
+                
+                // Disable image smoothing for pixel art
+                ctx.imageSmoothingEnabled = false;
+                
+                // Load all frames as images and place them side by side
+                const imagePromises = frameDataUrls.map((dataUrl, index) => {
+                    return new Promise((resolveImg, rejectImg) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const xPos = index * frameWidth;
+                            
+                            // Draw the frame at full size
+                            ctx.drawImage(
+                                img,
+                                xPos, // Destination X
+                                0, // Destination Y
+                                frameWidth,
+                                frameHeight
+                            );
+                            
+                            console.log(`Frame ${index + 1}/${frameDataUrls.length}: Placed ${img.width}x${img.height} at position x=${xPos} in spritesheet`);
+                            resolveImg();
+                        };
+                        img.onerror = () => rejectImg(new Error(`Failed to load frame ${index + 1}`));
+                        img.src = dataUrl;
+                    });
+                });
+                
+                // Wait for all frames to load and draw
+                Promise.all(imagePromises).then(() => {
+                    // Convert canvas to base64 data URL
+                    const spritesheetDataUrl = canvas.toDataURL('image/png');
+                    console.log(`Combined ${frameDataUrls.length} frames into spritesheet: ${canvas.width}x${canvas.height} (${frameDataUrls.length} frames of ${frameWidth}x${frameHeight} each)`);
+                    resolve(spritesheetDataUrl);
+                }).catch(reject);
+                
+            } catch (error) {
+                reject(error);
+            }
+        });
     }
 
     /**
@@ -959,25 +1252,35 @@ TEXT RESTRICTIONS (CRITICAL):
             const prompt = await this.generateBackgroundPrompt(location, timeWeather);
             console.log('Generated prompt:', prompt);
             
-            // Step 4: Generate background image
-            const backgroundImage = await this.generateBackgroundImage(prompt);
-            console.log('Background image generated');
+            // Step 4: Generate background image (returns object with frames array)
+            const backgroundData = await this.generateBackgroundImage(prompt, timeWeather);
+            console.log('Background frames generated');
             
-            // Step 5: Cache it with version 2 (4-frame animated format)
+            // Step 5: Cache it with version 5 (4 separate frames in array, no spritesheet in localStorage to save space)
             try {
-                localStorage.setItem('location_background', backgroundImage);
+                // Clear old spritesheet if it exists to make space
+                localStorage.removeItem('location_background');
+                
+                // Store the frames array (already 512x512 from API)
+                localStorage.setItem('location_background_frames', JSON.stringify(backgroundData.frames));
+                
                 localStorage.setItem('location_background_meta', JSON.stringify({
                     location,
                     timeWeather,
                     prompt,
                     timestamp: Date.now(),
-                    version: 2 // Version 2 = 4-frame animated spritesheet format
+                    version: 5, // Version 5 = 4 separate frames in array (no spritesheet needed in localStorage)
+                    frameCount: backgroundData.frameCount,
+                    frameWidth: backgroundData.frameWidth,
+                    frameHeight: backgroundData.frameHeight
                 }));
+                console.log('Background cached successfully (frames array)');
             } catch (storageError) {
-                console.warn('Could not cache background image:', storageError);
+                console.warn('Could not cache background image (localStorage probably full):', storageError);
+                // We still have it in memory for the current session via window.locationBackground
             }
             
-            return backgroundImage;
+            return backgroundData;
         } catch (error) {
             console.error('Error in generateLocationBackground:', error);
             throw error;

@@ -6,7 +6,7 @@ if (typeof Phaser === 'undefined') {
     throw new Error('Phaser.js is required but not found. Check script loading order in index.html');
 }
 
-// Export Game class to window for global access
+// Game class definition - will be exported to window.Game at end of file
 class Game {
     constructor(spriteSheetUrl, initialLevelImage = null) {
         this.spriteSheetUrl = spriteSheetUrl;
@@ -18,7 +18,6 @@ class Game {
         this.create = this.create.bind(this);
         this.update = this.update.bind(this);
         this.createLevel1 = this.createLevel1.bind(this);
-        this.generateLevelFromTilesheet = this.generateLevelFromTilesheet.bind(this);
         this.renderLevel = this.renderLevel.bind(this);
         this.renderLayer = this.renderLayer.bind(this);
         this.createCollectiblesFromLevel = this.createCollectiblesFromLevel.bind(this);
@@ -84,7 +83,6 @@ class Game {
         this.score = 0;
         this.lives = 3;
         this.levelData = null;
-        this.tilesheetData = null;
         this.levelGenerator = null;
         this.currentScene = null; // Store reference to active scene
     }
@@ -96,33 +94,17 @@ class Game {
         // Log the sprite URL length to verify we have data
         console.log('Game: Sprite sheet URL length:', this.spriteSheetUrl ? this.spriteSheetUrl.length : 'NULL');
         
-        // Load custom sprite sheet
-        scene.load.image('player', this.spriteSheetUrl);
-        
         // Load custom sprite sheet as IMAGE first (for dynamic sizing in create)
-        scene.load.image('player', this.spriteSheetUrl);
-        
-        // REMOVED: Static spritesheet loading
         // We will create the spritesheet dynamically in create() to handle different image sizes
+        scene.load.image('player', this.spriteSheetUrl);
 
-        // Load tilesheet (optional - used as fallback if AI tiles aren't available)
-        // Try to load, but don't fail if it doesn't exist since we use AI tiles now
-        try {
-            scene.load.spritesheet('tilesheet', 'Titlesheet.png', {
-                frameWidth: 64,
-                frameHeight: 64
-            });
-        } catch (e) {
-            console.warn('Titlesheet.png not found - will use AI-generated tiles only');
-        }
+        // Tilesheet loading removed - using AI-generated tiles only
         
-        // Load cat enemies spritesheet
-        // Cat.png is 870x674 with 6 columns x 6 rows
-        // Frame size: 870/6 = 145 wide, 674/6 ≈ 112 tall
-        scene.load.spritesheet('cat', 'Cat.png', {
-            frameWidth: 145,
-            frameHeight: 112
-        });
+        // Load cat enemy (fallback to static file)
+        const catPath = 'assets/Cat.png';
+        scene.load.image('catFallback', catPath);
+        
+        // If we have a generated cat spritesheet, it will be loaded in create()
 
         // Create platform graphic - use a data URL for a simple brown platform (fallback)
         const platformDataUrl = this.createPlatformDataURL();
@@ -138,19 +120,19 @@ class Game {
     }
 
     createPlatformDataURL() {
-        // Create a canvas-based platform graphic
+        // Create a canvas-based platform graphic using universal tile size
         const canvas = document.createElement('canvas');
-        canvas.width = 64;
-        canvas.height = 16;
+        canvas.width = CONFIG.TILE_SIZE;
+        canvas.height = CONFIG.TILE_SIZE / 4; // Platform height is 1/4 of tile size
         const ctx = canvas.getContext('2d');
         
         // Draw platform
         ctx.fillStyle = '#8B4513'; // Brown
-        ctx.fillRect(0, 0, 64, 16);
+        ctx.fillRect(0, 0, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE / 4);
         ctx.fillStyle = '#A0522D'; // Darker brown
-        ctx.fillRect(0, 12, 64, 4);
+        ctx.fillRect(0, (CONFIG.TILE_SIZE / 4) - 4, CONFIG.TILE_SIZE, 4);
         ctx.fillStyle = '#654321'; // Even darker for depth
-        ctx.fillRect(0, 14, 64, 2);
+        ctx.fillRect(0, (CONFIG.TILE_SIZE / 4) - 2, CONFIG.TILE_SIZE, 2);
         
         return canvas.toDataURL('image/png');
     }
@@ -171,15 +153,64 @@ class Game {
                 const frameWidth = Math.floor(sourceImage.width / 4);
                 const frameHeight = Math.floor(sourceImage.height / 4);
                 
-                console.log(`Game: creating dynamic spritesheet. Source: ${sourceImage.width}x${sourceImage.height}, Frame: ${frameWidth}x${frameHeight}`);
-                
-                // Use .image to get the raw DOM Image element
-                scene.textures.addSpriteSheet('playerSprite', playerTexture.source[0].image, {
+                scene.textures.addSpriteSheet('playerSprite', sourceImage.image, {
                     frameWidth: frameWidth,
                     frameHeight: frameHeight
                 });
-            } else if (!scene.textures.exists('playerSprite')) {
-                console.error('Game: Player texture MISSING (both player and playerSprite)');
+            }
+
+            // DYNAMIC CAT SPRITESHEET CREATION
+            const catSource = window.catEnemySpriteSheet;
+            if (catSource && !scene.textures.exists('cat')) {
+                const img = new Image();
+                img.onload = () => {
+                   // Cat sprite sheet should be 4x4 grid, each frame is CONFIG.TILE_SIZE (64x64)
+                   // Total size should be CONFIG.TILE_SIZE * 4 = 256x256
+                   const frameWidth = CONFIG.TILE_SIZE;
+                   const frameHeight = CONFIG.TILE_SIZE;
+                   scene.textures.addSpriteSheet('cat', img, {
+                       frameWidth: frameWidth,
+                       frameHeight: frameHeight
+                   });
+                   console.log(`Game: Successfully created dynamic cat spritesheet (4x4), frame size: ${frameWidth}x${frameHeight}`);
+                   
+                   // Re-create animations now that texture exists
+                   this.createAnimations(scene);
+                   
+                   // If level is already generated, we need to recreate enemies
+                   if (this.enemies && this.enemies.children.size === 0) {
+                       console.log('Game: Cat texture loaded after level generation, checking if enemies need to be recreated...');
+                   }
+                };
+                img.onerror = () => {
+                    console.error('Game: Failed to load cat sprite sheet image');
+                };
+                img.src = catSource;
+            } else if (!scene.textures.exists('cat') && scene.textures.exists('catFallback')) {
+                // Fallback to static image if no AI cat available
+                const fallbackImg = scene.textures.get('catFallback').source[0].image;
+                // Try to use tile size for fallback, but fallback image may have different dimensions
+                const fallbackFrameWidth = Math.floor(fallbackImg.width / 4);
+                const fallbackFrameHeight = Math.floor(fallbackImg.height / 4);
+                scene.textures.addSpriteSheet('cat', fallbackImg, {
+                    frameWidth: fallbackFrameWidth,
+                    frameHeight: fallbackFrameHeight
+                });
+                console.log(`Game: Using fallback cat sprite with frame size: ${fallbackFrameWidth}x${fallbackFrameHeight}`);
+            } else if (!scene.textures.exists('cat')) {
+                console.error('Game: No cat texture available - neither AI-generated nor fallback cat found!');
+                console.error('Game: Cats will not be visible. Check that cat spritesheet is being generated.');
+                console.error('Game: catEnemySpriteSheet available:', !!catSource);
+                console.error('Game: catFallback available:', scene.textures.exists('catFallback'));
+            }
+            
+            // Log cat texture status
+            if (scene.textures.exists('cat')) {
+                const catTexture = scene.textures.get('cat');
+                console.log(`Game: Cat texture exists: ${catTexture.key}, frames: ${catTexture.frameTotal || 'unknown'}`);
+            } else {
+                console.warn('Game: Cat texture does not exist - enemies will not be visible!');
+                console.warn('Game: Make sure cat spritesheet is pre-generated or fallback cat exists');
             }
 
             // Ensure player is created
@@ -188,13 +219,13 @@ class Game {
                 this.player.setBounce(0.2);
                 this.player.setCollideWorldBounds(true);
                 
-                // Calculate scale to make player approx 1.5 tiles high (approx 96px)
+                // Calculate scale to make player approx 1.5 tiles high
                 // If frame is 256px, scale should be ~0.375
-                // If frame is 64px, scale should be 1.5
+                // If frame matches tile size, scale should be 1.5
                 const playerFrame = scene.textures.get('playerSprite').frames[0];
-                const frameSize = playerFrame ? playerFrame.width : 64;
-                // Target size is roughly 1.5x standard sprite size (64 * 1.5 = 96)
-                const targetSize = CONFIG.SPRITE_SIZE * 1.5;
+                const frameSize = playerFrame ? playerFrame.width : CONFIG.TILE_SIZE;
+                // Target size is roughly 1.5x standard tile size
+                const targetSize = CONFIG.TILE_SIZE * 1.5;
                 const scale = targetSize / frameSize;
                 
                 console.log(`Game: Scaling player. Frame: ${frameSize}, Target: ${targetSize}, Scale: ${scale.toFixed(2)}`);
@@ -204,11 +235,21 @@ class Game {
                 // For a 256px frame scaled to 96px, body should be roughly smaller for better collisions
                 // Normalized to the frame size
                 if (this.player.body) {
-                   // Make hitbox narrower (50% of width) and shorter (80% of height)
-                   const hitWidth = frameSize * 0.5; 
-                   const hitHeight = frameSize * 0.8;
+                   // Hitbox refinement:
+                   // 35% width for narrow character, 75% height to leave room for head/feet
+                   const hitWidth = frameSize * 0.35; 
+                   const hitHeight = frameSize * 0.75;
                    this.player.body.setSize(hitWidth, hitHeight);
-                   this.player.body.setOffset((frameSize - hitWidth) / 2, (frameSize - hitHeight));
+                   
+                   // Offset: center-x, and leave ~10% room at top for head, ~15% at bottom for feet/ground
+                   // This prevents head clipping and helps with ground alignment
+                   this.player.body.setOffset((frameSize - hitWidth) / 2, frameSize * 0.15);
+                   
+                    // Fix sliding: Add high drag
+                    this.player.setDragX(2000); 
+                    
+                    // Save frame size for offset calculations in update()
+                    this.player.frameSize = frameSize;
                 }
                 
                 // Ensure player is rendered ON TOP of the level
@@ -220,9 +261,9 @@ class Game {
             console.log('Game: Creating Level 1...');
             this.createLevel1(scene);
             
-            // Ensure camera limits
+            // Ensure camera and physics world limits
             scene.cameras.main.setBounds(0, 0, CONFIG.GAME_WIDTH, CONFIG.GAME_HEIGHT);
-
+            scene.physics.world.setBounds(0, 0, CONFIG.GAME_WIDTH, CONFIG.GAME_HEIGHT, true, true, true, true);
             // Create animations
             this.createAnimations(scene);
 
@@ -234,7 +275,23 @@ class Game {
             
             // Add 'D' key for Debug Mode
             this.debugKey = scene.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.D);
-            this.debugMode = false; // Default to hidden
+            this.debugMode = false;
+
+            // Global safety: if cats fall through platforms, reset them or destroy them
+            scene.physics.world.on('worldbounds', (body) => {
+                if (body.gameObject && body.gameObject.texture && body.gameObject.texture.key === 'cat') {
+                    const worldBounds = scene.physics.world.bounds;
+                    // If cat falls below the kill zone, destroy it
+                    if (body.gameObject.y > worldBounds.height + 200) {
+                        console.warn(`Game: Cat fell off map at y=${body.gameObject.y}, destroying`);
+                        body.gameObject.destroy();
+                    } else if (body.gameObject.y > worldBounds.height) {
+                        // Reset to a safe position near the bottom
+                        body.gameObject.y = worldBounds.height - CONFIG.TILE_SIZE * 2;
+                        body.gameObject.setVelocityY(0);
+                    }
+                }
+            });
             
             scene.input.keyboard.on('keydown-D', () => {
                 this.toggleDebug();
@@ -251,30 +308,7 @@ class Game {
         }
     }
 
-    async generateLevelFromTilesheet(scene) {
-        try {
-            // Analyze tilesheet
-            console.log('Analyzing tilesheet...');
-            this.tilesheetData = await this.levelGenerator.analyzeTilesheet();
-            
-            // Generate level map
-            console.log('Generating level map...');
-            this.levelData = await this.levelGenerator.generateLevelMap(this.tilesheetData);
-            
-            // Render the level
-            this.renderLevel(scene);
-        } catch (error) {
-            console.error('Error generating level:', error);
-            
-            // Check if it's an API key error
-            if (error.type === 'API_KEY_EXPIRED' || error.type === 'API_KEY_INVALID') {
-                console.warn('API key issue detected. Using default level. Please check your API key.');
-            }
-            
-            // Fallback to default level
-            this.createDefaultLevel(scene);
-        }
-    }
+    // generateLevelFromTilesheet method removed - tilesheet functionality no longer used
 
     renderLevel(scene) {
         if (!this.levelData) {
@@ -301,8 +335,8 @@ class Game {
         }
 
         // Create player at spawn point
-        const spawnX = this.levelData.spawn ? this.levelData.spawn.x * 64 : 100;
-        const spawnY = this.levelData.spawn ? this.levelData.spawn.y * 64 : 450;
+        const spawnX = this.levelData.spawn ? this.levelData.spawn.x * CONFIG.TILE_SIZE : 100;
+        const spawnY = this.levelData.spawn ? this.levelData.spawn.y * CONFIG.TILE_SIZE : 450;
         
         // Reset player position if already created
         if (this.player) {
@@ -337,7 +371,7 @@ class Game {
     }
 
     renderLayer(scene, layerData, isSolid) {
-        const tileSize = 64;
+        const tileSize = CONFIG.TILE_SIZE;
         for (let row = 0; row < layerData.length; row++) {
             for (let col = 0; col < layerData[row].length; col++) {
                 const tileIndex = layerData[row][col];
@@ -345,18 +379,23 @@ class Game {
                     const x = col * tileSize;
                     const y = row * tileSize;
                     
-                    // Create tile sprite for visual
-                    const tile = scene.add.sprite(x, y, 'tilesheet', tileIndex);
+                    // Create tile visual using colored rectangle (tilesheet removed)
+                    const tile = scene.add.rectangle(x, y, tileSize, tileSize, isSolid ? 0x8B4513 : 0x90EE90);
                     tile.setOrigin(0, 0);
                     tile.setDepth(isSolid ? 1 : 0); // Ground tiles on top
                     
                     // If solid, create collision box
                     if (isSolid) {
-                        const platform = this.platforms.create(x, y, 'tilesheet', tileIndex);
+                        const platform = scene.add.rectangle(x, y, tileSize, tileSize, 0x8B4513);
+                        // Add physics as static (true parameter makes it immovable automatically)
+                        scene.physics.add.existing(platform, true);
+                        this.platforms.add(platform);
                         platform.setOrigin(0, 0);
-                        platform.setImmovable(true); // Static platform
-                        platform.body.setSize(tileSize, tileSize);
-                        platform.body.setOffset(0, 0); // Ensure collision box aligns with tile
+                        // Static bodies are automatically immovable, but ensure body exists
+                        if (platform.body) {
+                            platform.body.setSize(tileSize, tileSize);
+                            platform.body.setOffset(0, 0); // Ensure collision box aligns with tile
+                        }
                         // Make it invisible (we already have the visual tile above)
                         platform.setAlpha(0);
                         platform.setDepth(1);
@@ -389,6 +428,9 @@ class Game {
     }
 
     async generateLevelFromCSV(scene, csvData, preLoadedImage = null) {
+        // Ensure animations are created before creating enemies that need them
+        this.createAnimations(scene);
+        
         // Clear existing groups
         if (this.platforms) this.platforms.clear(true, true);
         if (this.enemies) this.enemies.clear(true, true);
@@ -421,17 +463,25 @@ class Game {
 
         // Parse CSV to get dimensions first
         const rows = csvData.trim().split('\n');
-        const tileSize = 32; 
+        const tileSize = CONFIG.TILE_SIZE; 
         const levelHeight = rows.length * tileSize;
         // Calculate offset to align level to BOTTOM of screen if it's smaller than game height
+        // For 8 rows (512px), yOffset will be 0 since level matches viewport exactly
         const yOffset = Math.max(0, CONFIG.GAME_HEIGHT - levelHeight);
         
+        // The actual playable level height (where content exists)
+        const actualLevelHeight = levelHeight;
+        // The canvas/rendering height (includes padding if level is smaller than viewport)
+        // For 8 rows (512px), canvasHeight equals levelHeight since yOffset is 0
+        const canvasHeight = levelHeight + yOffset;
+        
         console.log(`Game: Level Height: ${levelHeight}, Game Height: ${CONFIG.GAME_HEIGHT}, Y Offset: ${yOffset}`);
+        console.log(`Game: Actual playable height: ${actualLevelHeight}, Canvas height: ${canvasHeight}`);
 
         // Parse dimensions first for canvas sizing
         const maxCols = Math.max(...rows.map(r => r.length));
         const actualWidth = maxCols * tileSize;
-        const canvasHeight = levelHeight + yOffset;
+        // canvasHeight already calculated above
         
         // Validate dimensions (WebGL has maximum texture size limits)
         // Use a conservative limit - many systems have issues with textures > 2048
@@ -450,9 +500,19 @@ class Game {
         // Check for location background BEFORE creating canvases
         // ONLY location-based background (from IP address) is used - no other backgrounds
         const locationBg = window.locationBackground || localStorage.getItem('location_background');
-        const useForegroundCanvas = useRenderTexture && !locationBg; // Don't use foreground canvas if we have location background
+        // Get frames array if available (version 5+)
+        const locationBgFrames = window.locationBackgroundFrames || (() => {
+            try {
+                const framesStr = localStorage.getItem('location_background_frames');
+                return framesStr ? JSON.parse(framesStr) : null;
+            } catch (e) {
+                return null;
+            }
+        })();
+        const useFramesArray = locationBgFrames && locationBgFrames.length >= 4;
+        const useForegroundCanvas = useRenderTexture && !locationBg && !useFramesArray; // Don't use foreground canvas if we have location background
         // ONLY create background canvas if we have a location-based background
-        const useBackgroundCanvas = useRenderTexture && locationBg; // Only use background canvas for location-based background
+        const useBackgroundCanvas = useRenderTexture && (locationBg || useFramesArray); // Only use background canvas for location-based background
         
         // Initialize canvas references to null (will use sprite rendering)
         this.backgroundCanvas = null;
@@ -530,7 +590,7 @@ class Game {
         // This is the PRIMARY background - it should always be visible
         // Note: locationBg was already declared at line 441, reuse it here
         
-        if (locationBg) {
+        if (locationBg || useFramesArray) {
             console.log('Game: Location-based background (from IP) found - will tile and animate');
             try {
                 // Get weather metadata to determine animation style
@@ -544,16 +604,102 @@ class Game {
                     console.warn('Could not parse background metadata:', e);
                 }
                 
-                // Load the location background as a texture (4-frame spritesheet)
-                const bgKey = 'location_background_texture';
-                if (!scene.textures.exists(bgKey)) {
-                    scene.textures.addBase64(bgKey, locationBg);
-                }
+                // NEW APPROACH: Use frames array instead of spritesheet
+                // Load each frame as a separate texture and cycle through them
+                let frameWidth = 512; // Each frame is 512px wide (optimized from 1024)
+                let actualBgHeight = 512; // Each frame is 512px tall
+                let isAnimated = false;
                 
-                // Wait for texture to be ready and get ACTUAL dimensions from Gemini
-                let actualBgWidth = 51200; // Default: 4 frames x 12800px each
-                let actualBgHeight = 448; // Default fallback
-                let frameWidth = 12800; // Each frame is 12800px wide
+                if (useFramesArray) {
+                    // Version 5+: Use frames array - load each frame as separate texture
+                    console.log('Game: Loading 4 background frames as separate textures...');
+                    isAnimated = true;
+                    
+                    // Load each frame as a separate texture
+                    for (let i = 0; i < locationBgFrames.length; i++) {
+                        const frameKey = `bg_frame_${i}`;
+                        if (!scene.textures.exists(frameKey)) {
+                            scene.textures.addBase64(frameKey, locationBgFrames[i]);
+                        }
+                    }
+                    
+                    // Wait for all frames to load
+                    await new Promise((resolve) => {
+                        let attempts = 0;
+                        const maxAttempts = 100;
+                        const checkFrames = () => {
+                            attempts++;
+                            if (attempts > maxAttempts) {
+                                console.warn('Timeout waiting for background frames');
+                                resolve();
+                                return;
+                            }
+                            let allLoaded = true;
+                            for (let i = 0; i < locationBgFrames.length; i++) {
+                                if (!scene.textures.exists(`bg_frame_${i}`)) {
+                                    allLoaded = false;
+                                    break;
+                                }
+                            }
+                            if (allLoaded) {
+                                // Get dimensions from first frame
+                                const texture = scene.textures.get('bg_frame_0');
+                                if (texture && texture.source && texture.source.length > 0) {
+                                    const source = texture.source[0];
+                                    if (source.width > 0 && source.height > 0) {
+                                        frameWidth = source.width;
+                                        actualBgHeight = source.height;
+                                        console.log(`Game: Background frames loaded: ${frameWidth}x${actualBgHeight} each`);
+                                    }
+                                }
+                                resolve();
+                                return;
+                            }
+                            setTimeout(checkFrames, 50);
+                        };
+                        checkFrames();
+                    });
+                } else {
+                    // Fallback: Use spritesheet (old version)
+                    const bgKey = 'location_background_texture';
+                    if (!scene.textures.exists(bgKey)) {
+                        scene.textures.addBase64(bgKey, locationBg);
+                    }
+                    
+                    // Wait for texture to be ready and get ACTUAL dimensions from Gemini
+                    let actualBgWidth = 2048; // Default: 4 frames x 512px each
+                    
+                    await new Promise((resolve) => {
+                        let attempts = 0;
+                        const maxAttempts = 100;
+                        const checkTexture = () => {
+                            attempts++;
+                            if (attempts > maxAttempts) {
+                                console.warn('Timeout waiting for background texture');
+                                resolve();
+                                return;
+                            }
+                            // Use the bgKey constant defined in the outer scope
+                            if (scene.textures.exists('location_background_texture')) {
+                                const texture = scene.textures.get('location_background_texture');
+                                if (texture && texture.source && texture.source.length > 0) {
+                                    const source = texture.source[0];
+                                    if (source.width > 0 && source.height > 0) {
+                                        actualBgWidth = source.width;
+                                        actualBgHeight = source.height;
+                                        frameWidth = actualBgWidth >= 1800 && actualBgWidth <= 2200 ? actualBgWidth / 4 : actualBgWidth;
+                                        isAnimated = actualBgWidth >= 1800 && actualBgWidth <= 2200;
+                                        console.log(`Game: Background image dimensions from Gemini: ${actualBgWidth}x${actualBgHeight}`);
+                                        resolve();
+                                        return;
+                                    }
+                                }
+                            }
+                            setTimeout(checkTexture, 50);
+                        };
+                        checkTexture();
+                    });
+                }
                 
                 await new Promise((resolve) => {
                     let attempts = 0;
@@ -565,22 +711,38 @@ class Game {
                             resolve();
                             return;
                         }
-                        if (scene.textures.exists(bgKey)) {
-                            const texture = scene.textures.get(bgKey);
+                        const textureKey = 'location_background_texture';
+                        if (scene.textures.exists(textureKey)) {
+                            const texture = scene.textures.get(textureKey);
                             if (texture && texture.source && texture.source.length > 0) {
                                 const source = texture.source[0];
                                 if (source.width > 0 && source.height > 0) {
                                     // Get ACTUAL dimensions from the image Gemini returned
                                     actualBgWidth = source.width;
                                     actualBgHeight = source.height;
-                                    // If it's a 4-frame spritesheet, each frame is width/4
-                                    if (actualBgWidth >= 51200) {
+                                    
+                                    console.log(`Game: Background image dimensions from Gemini: ${actualBgWidth}x${actualBgHeight}`);
+                                    
+                                    // Check if it's a 4-frame spritesheet (should be 2048px wide: 4 frames x 512px each)
+                                    // Allow some tolerance for slight variations
+                                    if (actualBgWidth >= 1800 && actualBgWidth <= 2200 && actualBgHeight >= 450 && actualBgHeight <= 550) {
+                                        // Likely a 4-frame spritesheet (4 x 512px = 2048px)
                                         frameWidth = actualBgWidth / 4;
-                                        console.log(`Game: Location background is 4-frame spritesheet: ${actualBgWidth}x${actualBgHeight} (each frame: ${frameWidth}x${actualBgHeight})`);
-                                    } else {
-                                        // Fallback: single frame
+                                        console.log(`Game: Location background appears to be 4-frame spritesheet: ${actualBgWidth}x${actualBgHeight} (each frame: ${frameWidth}x${actualBgHeight})`);
+                                        
+                                        if (actualBgWidth !== 2048 || actualBgHeight !== 512) {
+                                            console.warn(`Game: Image is ${actualBgWidth}x${actualBgHeight}, expected 2048x512 for 4 frames (4 x 512x512). May not animate correctly.`);
+                                        }
+                                    } else if (actualBgWidth === 1024 && actualBgHeight === 1024) {
+                                        // This is an old cached single frame - should have been regenerated
                                         frameWidth = actualBgWidth;
-                                        console.log(`Game: Location background is single frame: ${actualBgWidth}x${actualBgHeight}`);
+                                        console.error(`Game: ERROR - Found old cached background (1024x1024 single frame). This should have been regenerated!`);
+                                        console.error(`Game: Please clear cache and regenerate background. Using as static frame for now.`);
+                                    } else {
+                                        // Too small or wrong size for 4 frames - treat as single frame
+                                        frameWidth = actualBgWidth;
+                                        console.warn(`Game: Location background is wrong size for 4-frame animation: ${actualBgWidth}x${actualBgHeight} (expected 2048x512 for 4 frames of 512x512 each)`);
+                                        console.warn(`Game: Will use as single static frame instead of animated spritesheet`);
                                     }
                                     resolve();
                                     return;
@@ -593,12 +755,15 @@ class Game {
                 });
                 
                 // Parse 4-frame spritesheet into a Phaser sprite sheet
-                // Check if it's animated: should be 4 frames (51200px wide) or close to it
-                const isAnimated = actualBgWidth >= 40000; // Allow some tolerance (at least ~3.1 frames worth)
+                // Check if it's animated: should be 4 frames (2048px wide: 4 x 512px) or close to it
+                // Note: isAnimated was already declared above, so just update it
+                if (!useFramesArray) {
+                    isAnimated = actualBgWidth >= 1800 && actualBgWidth <= 2200; // Allow some tolerance for 4 frames of 512px
+                }
                 
                 if (isAnimated && !scene.textures.exists('bg_spritesheet')) {
                     console.log('Game: Creating sprite sheet from 4-frame animated background...');
-                    const texture = scene.textures.get(bgKey);
+                    const texture = scene.textures.get('location_background_texture');
                     if (texture && texture.source && texture.source.length > 0) {
                         const source = texture.source[0];
                         
@@ -616,34 +781,89 @@ class Game {
                         });
                         
                         // Create sprite sheet with 4 frames horizontally
+                        // Phaser expects frames arranged horizontally in a single row
+                        // Our image should be 51200px wide with 4 frames of 12800px each
                         try {
+                            // Verify the image dimensions match our expectations
+                            console.log(`Game: Creating spritesheet from image ${source.image.width}x${source.image.height}`);
+                            console.log(`Game: Expected dimensions: ${actualBgWidth}x${actualBgHeight}, frameWidth: ${frameWidth}`);
+                            
+                            if (source.image.width < 3800) {
+                                console.error(`Game: Image too small for 4-frame animation! Got ${source.image.width}px, need at least 4096px (4 x 1024px)`);
+                                console.error(`Game: This image appears to be a single frame, not a 4-frame spritesheet`);
+                            }
+                            
+                            // Create the spritesheet - Phaser will extract frames horizontally
+                            // For a 4096x1024 image with 4 frames of 1024x1024 each
+                            // Phaser calculates: 4096 / 1024 = 4 frames
                             scene.textures.addSpriteSheet('bg_spritesheet', source.image, {
-                                frameWidth: frameWidth,
-                                frameHeight: actualBgHeight,
-                                startFrame: 0,
-                                endFrame: 3
+                                frameWidth: frameWidth,  // 1024px per frame
+                                frameHeight: actualBgHeight  // 1024px
                             });
-                            console.log(`Game: Created background sprite sheet (4 frames, ${frameWidth}x${actualBgHeight} per frame)`);
+                            
+                            // Phaser might create 5 frames (0-4) if there's any rounding, so we need to ensure only 4
+                            const sheet = scene.textures.get('bg_spritesheet');
+                            if (sheet) {
+                                // Calculate expected frames: image width / frame width
+                                const expectedFrames = Math.floor(source.image.width / frameWidth);
+                                console.log(`Game: Image is ${source.image.width}x${source.image.height}, expected ${expectedFrames} frames of ${frameWidth}x${actualBgHeight}`);
+                                
+                                if (sheet.frameTotal > 4) {
+                                    console.warn(`Game: Phaser created ${sheet.frameTotal} frames, but we only need 4. This is OK, we'll only use frames 0-3.`);
+                                }
+                            }
+                            
+                            // Verify the spritesheet was created correctly
+                            const createdSheet = scene.textures.get('bg_spritesheet');
+                            if (createdSheet) {
+                                const frameCount = createdSheet.frameTotal || 0;
+                                console.log(`Game: Created background sprite sheet successfully - ${frameCount} frames`);
+                                console.log(`Game: Spritesheet details - frameWidth: ${frameWidth}, frameHeight: ${actualBgHeight}, total frames: ${frameCount}`);
+                                
+                                // Verify frames exist
+                                for (let f = 0; f < 4; f++) {
+                                    const frame = createdSheet.get(f);
+                                    if (frame) {
+                                        console.log(`Game: Frame ${f} exists: ${frame.width}x${frame.height}`);
+                                    } else {
+                                        console.error(`Game: ERROR - Frame ${f} does not exist!`);
+                                    }
+                                }
+                                
+                                if (frameCount !== 4) {
+                                    console.warn(`Game: WARNING - Expected 4 frames but got ${frameCount}!`);
+                                }
+                            } else {
+                                console.error('Game: Spritesheet creation returned null');
+                            }
                         } catch (err) {
                             console.error('Game: Failed to create sprite sheet:', err);
+                            console.error('Game: Error details:', err.message);
                         }
                     }
                 }
                 
                 // Use frame width (single frame or one frame from spritesheet)
-                // The background image is 12800px wide per frame (400 tiles x 32px)
-                // Display it at 1:1 pixel scale - no scaling needed horizontally
-                // Scale vertically to match canvas height
-                const bgTileWidth = frameWidth; // 12800 pixels = 400 tiles x 32px
-                const bgTileHeight = actualBgHeight; // 448 pixels = 14 tiles x 32px
-                const tilesNeeded = Math.ceil(actualWidth / bgTileWidth);
-                const scaleY = canvasHeight / bgTileHeight;
+                // Background frames are 512x512, viewport is 512x512 - no scaling needed!
+                // Display at 1:1 scale to match viewport exactly
+                const bgTileWidth = frameWidth; // 512 pixels per frame
+                const bgTileHeight = actualBgHeight; // 512 pixels tall per frame
+                
+                // Scale to fit the VIEWPORT (not canvas height) - viewport is always 512x512
+                // This ensures background matches viewport size exactly
+                const scaleY = CONFIG.GAME_HEIGHT / bgTileHeight; // Scale to fit viewport height (512px)
+                const scaleX = scaleY; // Use uniform scaling to maintain aspect ratio
+                
+                // Calculate how many tiles we need (using scaled width)
+                const scaledTileWidth = bgTileWidth * scaleX;
+                const tilesNeeded = Math.ceil(actualWidth / scaledTileWidth);
                 
                 console.log(`Game: Tiling location-based background (from IP)`);
                 console.log(`  - Actual image dimensions from Gemini: ${actualBgWidth}x${actualBgHeight}`);
-                console.log(`  - Frame width: ${frameWidth}px (${frameWidth/32} tiles), Height: ${actualBgHeight}px (${actualBgHeight/32} tiles)`);
-                console.log(`  - Level width: ${actualWidth}px (${actualWidth/32} tiles), Height: ${canvasHeight}px`);
-                console.log(`  - Tiles needed: ${tilesNeeded}, Scale Y: ${scaleY.toFixed(2)}`);
+                console.log(`  - Frame width: ${frameWidth}px, Height: ${actualBgHeight}px (each frame is ${frameWidth}x${actualBgHeight})`);
+                console.log(`  - Viewport size: ${CONFIG.GAME_WIDTH}x${CONFIG.GAME_HEIGHT}px`);
+                console.log(`  - Level width: ${actualWidth}px (${actualWidth/CONFIG.TILE_SIZE} tiles), Canvas height: ${canvasHeight}px`);
+                console.log(`  - Tiles needed: ${tilesNeeded}, Scale X: ${scaleX.toFixed(2)}, Scale Y: ${scaleY.toFixed(2)} (scaled to viewport, not canvas)`);
                 console.log(`  - Animated: ${isAnimated ? 'YES (4 frames)' : 'NO (single frame)'}`);
                 console.log(`  - Background will be at depth: -10 (behind everything)`);
                 
@@ -669,18 +889,72 @@ class Game {
                     }
                     
                     if (scene.textures.exists('bg_spritesheet')) {
+                        // Verify spritesheet has frames before creating animation
+                        const sheet = scene.textures.get('bg_spritesheet');
+                        const frameCount = sheet ? (sheet.frameTotal || 0) : 0;
+                        console.log(`Game: Spritesheet ready with ${frameCount} frames, creating animation...`);
+                        
                         if (!scene.anims.exists('bg_animate')) {
                             try {
-                                scene.anims.create({
+                                // Build animation frames manually to ensure they're valid
+                                const sheet = scene.textures.get('bg_spritesheet');
+                                if (!sheet) {
+                                    throw new Error('Spritesheet does not exist');
+                                }
+                                
+                                // Use Phaser's AnimationFrameConfig format
+                                const animFrames = [];
+                                for (let i = 0; i < 4; i++) {
+                                    if (sheet.has(i)) {
+                                        // Use the proper Phaser frame format
+                                        animFrames.push({
+                                            key: 'bg_spritesheet',
+                                            frame: i
+                                        });
+                                        console.log(`Game: Added frame ${i} to animation`);
+                                    } else {
+                                        console.error(`Game: Frame ${i} missing from spritesheet!`);
+                                    }
+                                }
+                                
+                                if (animFrames.length !== 4) {
+                                    throw new Error(`Expected 4 frames but only found ${animFrames.length}`);
+                                }
+                                
+                                console.log(`Game: Built animation with ${animFrames.length} frames manually`);
+                                
+                                // Create the animation
+                                const animConfig = {
                                     key: 'bg_animate',
-                                    frames: scene.anims.generateFrameNumbers('bg_spritesheet', { start: 0, end: 3 }),
+                                    frames: animFrames,
                                     frameRate: animSpeed,
                                     repeat: -1 // Loop forever
-                                });
-                                console.log(`Game: Created background animation (${animSpeed} fps, 4 frames)`);
+                                };
+                                
+                                scene.anims.create(animConfig);
+                                
+                                // Verify animation was created and has valid frames
+                                if (scene.anims.exists('bg_animate')) {
+                                    const anim = scene.anims.get('bg_animate');
+                                    console.log(`Game: ✓ Background animation created successfully (${animSpeed} fps, ${anim.frames.length} frames, key: 'bg_animate')`);
+                                    
+                                    // Verify each frame is valid
+                                    anim.frames.forEach((frame, idx) => {
+                                        if (frame && frame.frame) {
+                                            console.log(`Game: Animation frame ${idx}: valid (frame index: ${frame.frame.index !== undefined ? frame.frame.index : frame.frame.name})`);
+                                        } else {
+                                            console.error(`Game: Animation frame ${idx} is invalid!`, frame);
+                                        }
+                                    });
+                                } else {
+                                    console.error('Game: Animation creation failed - animation does not exist!');
+                                }
                             } catch (err) {
                                 console.error('Game: Failed to create animation:', err);
+                                console.error('Game: Error stack:', err.stack);
                             }
+                        } else {
+                            console.log('Game: Animation bg_animate already exists');
                         }
                     } else {
                         console.warn('Game: Spritesheet not ready after waiting, animation may not work');
@@ -708,44 +982,99 @@ class Game {
                 });
                 this.backgroundSprites = [];
                 
-                // Use sprite sheet for animated, or single texture for static
-                const spriteKey = isAnimated ? 'bg_spritesheet' : bgKey;
-                
+                // Create background sprites - use frames array if available, otherwise fallback to spritesheet
                 for (let i = 0; i < tilesNeeded; i++) {
-                    // Use sprite for animated backgrounds, image for static
-                    // Position each tile at the correct x coordinate
-                    const xPos = i * bgTileWidth;
+                    const scaledTileWidth = bgTileWidth * scaleX;
+                    const xPos = i * scaledTileWidth;
                     
                     let bgSprite;
-                    if (isAnimated && scene.textures.exists('bg_spritesheet')) {
-                        // Create sprite with animation support
-                        bgSprite = scene.add.sprite(xPos, 0, 'bg_spritesheet', 0); // Start with frame 0
+                    if (useFramesArray) {
+                        // Version 5+: Use frames array - create sprite with first frame, we'll cycle through them
+                        bgSprite = scene.add.image(xPos, 0, 'bg_frame_0'); // Start with frame 0
+                    bgSprite.setOrigin(0, 0);
+                    // Background should be exactly viewport height (512px), not scaled to level height
+                    bgSprite.setDisplaySize(bgTileWidth * scaleX, CONFIG.GAME_HEIGHT);
+                        // Store animation data
+                        bgSprite.setData('frameCount', 4);
+                        bgSprite.setData('currentFrame', 0);
+                        bgSprite.setData('lastFrameUpdate', Date.now());
+                        bgSprite.setData('frameRate', 1000 / animSpeed);
+                    } else if (isAnimated && scene.textures.exists('bg_spritesheet')) {
+                        // Fallback: Use spritesheet (old version)
+                        bgSprite = scene.add.sprite(xPos, 0, 'bg_spritesheet', 0);
+                    bgSprite.setOrigin(0, 0);
+                    // Background should be exactly viewport height (512px), not scaled to level height
+                    bgSprite.setDisplaySize(bgTileWidth * scaleX, CONFIG.GAME_HEIGHT);
+                        if (scene.anims.exists('bg_animate')) {
+                            bgSprite.play('bg_animate');
+                        }
                     } else {
-                        // Use image for static backgrounds
+                        // Static background
+                        const bgKey = 'location_background_texture';
                         bgSprite = scene.add.image(xPos, 0, bgKey);
+                    bgSprite.setOrigin(0, 0);
+                    // Background should be exactly viewport height (512px), not scaled to level height
+                    bgSprite.setDisplaySize(bgTileWidth * scaleX, CONFIG.GAME_HEIGHT);
                     }
                     
-                    bgSprite.setOrigin(0, 0);
-                    // Display at 1:1 pixel scale horizontally, scale vertically to match canvas height
-                    bgSprite.setDisplaySize(bgTileWidth, bgTileHeight * scaleY);
-                    bgSprite.setDepth(-10); // Behind everything
-                    bgSprite.setScrollFactor(1, 1); // Move with camera
+                    bgSprite.setDepth(-10);
+                    bgSprite.setScrollFactor(1, 1);
                     bgSprite.setVisible(true);
                     bgSprite.setAlpha(1.0);
                     
-                    // Start animation if available (only works with sprites, not images)
-                    if (isAnimated && scene.anims.exists('bg_animate') && bgSprite.play) {
-                        try {
-                            bgSprite.play('bg_animate');
-                            console.log(`Game: Started animation on background sprite ${i} at x=${xPos}`);
-                        } catch (err) {
-                            console.warn(`Game: Failed to start animation on sprite ${i}:`, err);
+                    this.backgroundSprites.push(bgSprite);
+                }
+                
+                // Set up frame cycling timer if using frames array
+                if (useFramesArray && this.backgroundSprites.length > 0) {
+                    // Determine animation speed based on weather
+                    let animSpeed = 8; // Default: 8 frames per second
+                    if (weatherMeta && weatherMeta.timeWeather) {
+                        const weather = weatherMeta.timeWeather;
+                        if (weather.season === 'winter' || weather.timeOfDay === 'night') {
+                            animSpeed = 6; // Slower for winter/night
+                        } else if (weather.season === 'spring' || weather.season === 'summer') {
+                            animSpeed = 10; // Faster for spring/summer
                         }
-                    } else if (isAnimated) {
-                        console.warn(`Game: Animation not available for sprite ${i} (isAnimated=${isAnimated}, animExists=${scene.anims.exists('bg_animate')}, hasPlay=${!!bgSprite.play})`);
                     }
                     
-                    this.backgroundSprites.push(bgSprite);
+                    // Calculate frame duration in milliseconds
+                    const frameDuration = 1000 / animSpeed; // e.g., 8 fps = 125ms per frame
+                    
+                    // Create a timer to cycle through frames
+                    this.backgroundFrameTimer = scene.time.addEvent({
+                        delay: frameDuration,
+                        callback: () => {
+                            // Cycle to next frame for all background sprites
+                            this.backgroundSprites.forEach(sprite => {
+                                if (sprite && sprite.active) {
+                                    const frameKeys = sprite.getData('frameKeys');
+                                    if (frameKeys && frameKeys.length === 4) {
+                                        let currentIndex = sprite.getData('frameIndex') || 0;
+                                        currentIndex = (currentIndex + 1) % 4; // Cycle 0->1->2->3->0
+                                        sprite.setTexture(frameKeys[currentIndex]);
+                                        sprite.setData('frameIndex', currentIndex);
+                                    }
+                                }
+                            });
+                        },
+                        loop: true
+                    });
+                    
+                    console.log(`Game: Background frame cycling started (${animSpeed} fps, ${frameDuration.toFixed(0)}ms per frame)`);
+                }
+                
+                // Verify animation is working
+                if (isAnimated && this.backgroundSprites.length > 0) {
+                    const firstSprite = this.backgroundSprites[0];
+                    if (firstSprite && firstSprite.anims) {
+                        const anim = firstSprite.anims.currentAnim;
+                        if (anim) {
+                            console.log(`Game: Background animation verified - ${anim.key} playing at ${anim.frameRate} fps, frame ${anim.currentFrame?.index || 'unknown'}`);
+                        } else {
+                            console.warn('Game: Background sprite created but animation not playing');
+                        }
+                    }
                 }
                 console.log(`Game: Location-based background (from IP) tiled as ${isAnimated ? 'animated' : 'static'} images (${tilesNeeded} horizontal tiles, depth: -10)`);
             } catch (error) {
@@ -778,10 +1107,12 @@ class Game {
             
             // Set up camera bounds and follow player immediately
             // This enables background scrolling while tiles are being generated
-            scene.physics.world.setBounds(0, 0, actualWidth, canvasHeight);
+            // Use canvasHeight for initial bounds (will be updated later with actual level height)
+            scene.physics.world.setBounds(0, 0, actualWidth, canvasHeight, true, true, true, true);
             scene.cameras.main.setBounds(0, 0, actualWidth, canvasHeight);
             scene.cameras.main.startFollow(this.player, true, 0.1, 0.1);
-            console.log('Game: Camera and player set up - background can now scroll while tiles load');
+            scene.cameras.main.setDeadzone(0, 0);
+            console.log(`Game: Camera and player set up - initial bounds: ${actualWidth}x${canvasHeight}, background can scroll while tiles load`);
         } else if (!this.player) {
             console.warn('Game: Player sprite not ready yet, camera setup will happen after player creation');
         }
@@ -792,17 +1123,26 @@ class Game {
         
         const loadTiles = async () => {
             try {
-                // Check for cached tiles (but don't fail if localStorage is full)
+                // Check for cached tiles using AssetStorage or fallback to localStorage
                 let tiles = null;
                 try {
-                    const cachedTiles = localStorage.getItem('level_tiles_v1');
-                    if (cachedTiles) {
-                        console.log('Using cached AI-generated tiles');
-                        tiles = JSON.parse(cachedTiles);
+                    if (window.assetStorage) {
+                        const cachedTilesStr = await window.assetStorage.getItem('level_tiles_v1');
+                        if (cachedTilesStr) {
+                            console.log('Using cached AI-generated tiles (IndexedDB)');
+                            tiles = JSON.parse(cachedTilesStr);
+                        }
+                    }
+                    
+                    if (!tiles) {
+                        const cachedTiles = localStorage.getItem('level_tiles_v1');
+                        if (cachedTiles) {
+                            console.log('Using cached AI-generated tiles (localStorage)');
+                            tiles = JSON.parse(cachedTiles);
+                        }
                     }
                 } catch (storageError) {
-                    console.warn('Could not read from localStorage (quota exceeded?):', storageError);
-                    // Continue to generate new tiles
+                    console.warn('Could not read from storage:', storageError);
                 }
                 
                 // Generate new tiles if not cached
@@ -812,25 +1152,16 @@ class Game {
                     tiles = await window.api.generateLevelTiles(currentLevel.theme);
                     
                     // Clear old cache and save new tiles
+                    // Save tiles to storage
                     try {
-                        // Remove old cache entry to free up space
-                        localStorage.removeItem('level_tiles_v1');
-                        // Now save the new tiles
-                        localStorage.setItem('level_tiles_v1', JSON.stringify(tiles));
-                        console.log('Tiles cached successfully (overwrote old cache)');
-                    } catch (storageError) {
-                        console.warn('Could not cache tiles (localStorage quota exceeded), clearing cache and retrying...', storageError);
-                        // Try to clear more space by removing other game-related cache
-                        try {
-                            localStorage.removeItem('level_tiles_v1');
-                            localStorage.removeItem('character_sprite_sheet');
-                            // Try again
+                        if (window.assetStorage) {
+                            await window.assetStorage.setItem('level_tiles_v1', JSON.stringify(tiles));
+                            localStorage.setItem('has_level_tiles', 'true');
+                        } else {
                             localStorage.setItem('level_tiles_v1', JSON.stringify(tiles));
-                            console.log('Tiles cached after clearing additional cache');
-                        } catch (retryError) {
-                            console.warn('Still could not cache tiles, using directly from API:', retryError);
-                            // Continue anyway - we have the tiles in memory
                         }
+                    } catch (storageError) {
+                        console.warn('Could not cache tiles in storage:', storageError);
                     }
                 }
                 
@@ -967,7 +1298,7 @@ class Game {
                 this.aiTilesAvailable = aiTilesAvailable;
                 console.log(`this.aiTilesAvailable set to: ${this.aiTilesAvailable}`);
             } catch (error) {
-                console.warn('Could not load AI tiles, using fallback tilesheet:', error);
+                console.warn('Could not load AI tiles:', error);
                 this.aiTilesAvailable = false;
             }
         };
@@ -979,15 +1310,17 @@ class Game {
         // Phaser's addBase64 can trigger scene refreshes that might affect existing sprites
         // This happens RIGHT AFTER tile POST calls return, which is when the background disappears
         const bgKey = 'location_background_texture';
-        if (scene.textures.exists(bgKey)) {
-            console.log('Game: Background texture still exists after tile loading ✓');
+        const frame0Key = 'bg_frame_0';
+        
+        const bgExists = scene.textures.exists(bgKey) || scene.textures.exists(frame0Key);
+        
+        if (bgExists) {
+            console.log('Game: Background texture (or frame 0) still exists after tile loading ✓');
         } else {
             console.error('Game: ERROR - Background texture was removed/overwritten during tile loading!');
-            // Re-add it if it was accidentally removed
-            if (locationBg) {
-                console.log('Game: Re-adding background texture...');
-                scene.textures.addBase64(bgKey, locationBg);
-            }
+            // Re-run updateBackground to restore visuals
+            console.log('Game: Triggering background restoration...');
+            this.updateBackground();
         }
         
         if (this.backgroundSprites && this.backgroundSprites.length > 0) {
@@ -995,22 +1328,20 @@ class Game {
             let activeCount = 0;
             this.backgroundSprites.forEach((sprite, index) => {
                 if (sprite && sprite.active) {
-                    // Re-apply all properties to ensure they persist
                     sprite.setVisible(true);
-                    sprite.setDepth(-10); // Must be behind all tiles
+                    sprite.setDepth(-10);
                     sprite.setAlpha(1.0);
                     sprite.setScrollFactor(1, 1);
-                    // Ensure the texture reference is still valid
-                    if (sprite.texture && sprite.texture.key !== bgKey) {
-                        console.warn(`Game: Background sprite ${index} texture changed from ${bgKey} to ${sprite.texture.key}`);
-                        // Try to restore the correct texture
-                        if (scene.textures.exists(bgKey)) {
-                            sprite.setTexture(bgKey);
+                    
+                    // Critical: if sprite lost its texture reference during Phaser texture changes, reset it
+                    if (!sprite.texture || (sprite.texture.key !== bgKey && !sprite.texture.key.startsWith('bg_frame_'))) {
+                        const targetKey = useFramesArray ? 'bg_frame_0' : bgKey;
+                        console.warn(`Game: Restoring texture for background sprite ${index} to ${targetKey}`);
+                        if (scene.textures.exists(targetKey)) {
+                            sprite.setTexture(targetKey);
                         }
                     }
                     activeCount++;
-                } else {
-                    console.warn(`Game: Background sprite ${index} became inactive after texture loading`);
                 }
             });
             console.log(`Game: Background sprites re-verified after tile loading (${activeCount}/${this.backgroundSprites.length} active)`);
@@ -1039,21 +1370,18 @@ class Game {
             cells.forEach((cell, colIndex) => {
                 const x = colIndex * tileSize;
                 const y = (rowIndex * tileSize) + yOffset;
-                const centerX = x + 16;
-                const centerY = y + 16;
+                const centerX = x + (tileSize / 2);
+                const centerY = y + (tileSize / 2);
 
                 switch (cell) {
                     case 'P': // Platform
                         let p;
-                        if (scene.textures.exists('tilesheet')) {
-                            p = this.platforms.create(x, y, 'tilesheet', 1);
-                        } else {
-                            p = scene.add.rectangle(centerX, centerY, 32, 32, 0x8B4513);
+                        {
+                            p = scene.add.rectangle(centerX, centerY, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x8B4513);
                             scene.physics.add.existing(p, true);
                             this.platforms.add(p);
                         }
-                        p.setOrigin(0, 0);
-                        if (p.body) p.body.setSize(32, 32);
+                        // Default origin is 0.5, so it stays centered at centerX, centerY
                         p.setVisible(false);
                         
                         // Draw visual on foreground canvas
@@ -1061,18 +1389,13 @@ class Game {
                             if (this.aiTilesAvailable && scene.textures.exists('tile_platform')) {
                                 const tempImg = scene.add.image(0, 0, 'tile_platform');
                                 tempImg.setOrigin(0.5, 0.5);
-                                // CRITICAL: Scale down from 1024x1024 to 32x32 pixels
-                                tempImg.setDisplaySize(32, 32);
-                                this.foregroundCanvas.draw(tempImg, centerX, centerY);
-                                tempImg.destroy();
-                            } else if (scene.textures.exists('tilesheet')) {
-                                const tempImg = scene.add.image(0, 0, 'tilesheet', 1);
-                                tempImg.setTint(0x8B4513);
-                                tempImg.setOrigin(0.5, 0.5);
+                                // CRITICAL: Scale down from 1024x1024 to tile size pixels
+                                tempImg.setDisplaySize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
                                 this.foregroundCanvas.draw(tempImg, centerX, centerY);
                                 tempImg.destroy();
                             } else {
-                                const tempRect = scene.add.rectangle(0, 0, 32, 32, 0x8B4513);
+                                // Use colored rectangle for platform visual
+                                const tempRect = scene.add.rectangle(0, 0, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x8B4513);
                                 tempRect.setOrigin(0.5, 0.5);
                                 this.foregroundCanvas.draw(tempRect, centerX, centerY);
                                 tempRect.destroy();
@@ -1081,76 +1404,92 @@ class Game {
                             // Fallback: create visible sprite
                             if (this.aiTilesAvailable && scene.textures.exists('tile_platform')) {
                                 const visual = scene.add.image(centerX, centerY, 'tile_platform');
-                                // CRITICAL: Scale down from 1024x1024 to 32x32 pixels
-                                visual.setDisplaySize(32, 32);
-                                visual.setDepth(0);
-                            } else if (scene.textures.exists('tilesheet')) {
-                                const visual = scene.add.image(centerX, centerY, 'tilesheet', 1);
-                                visual.setTint(0x8B4513);
+                                // CRITICAL: Scale down from 1024x1024 to tile size pixels
+                                visual.setDisplaySize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
                                 visual.setDepth(0);
                             } else {
-                                const visual = scene.add.rectangle(centerX, centerY, 32, 32, 0x8B4513);
+                                // Use colored rectangle for platform visual
+                                const visual = scene.add.rectangle(centerX, centerY, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x8B4513);
                                 visual.setDepth(0);
                             }
                         }
                         break;
                     case 'W': // Water (Hazard)
                         let w;
-                        if (scene.textures.exists('tilesheet')) {
-                            w = this.hazards.create(x, y, 'tilesheet', 2);
-                        } else {
-                            w = scene.add.rectangle(centerX, centerY, 32, 32, 0x1E90FF);
+                        {
+                            w = scene.add.rectangle(centerX, centerY, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x1E90FF);
                             scene.physics.add.existing(w, true);
                             this.hazards.add(w);
                         }
-                        w.setOrigin(0, 0);
-                        if (w.body) w.body.setSize(32, 32);
+                        // Default origin is 0.5
                         w.setVisible(false);
                         
                         // Draw water visual on foreground canvas
                         if (this.foregroundCanvas) {
-                            if (scene.textures.exists('tilesheet')) {
-                                const tempImg = scene.add.image(0, 0, 'tilesheet', 2);
-                                tempImg.setTint(0x1E90FF);
+                            if (this.aiTilesAvailable && scene.textures.exists('tile_platform')) {
+                                const tempImg = scene.add.image(0, 0, 'tile_platform');
+                                tempImg.setDisplaySize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
                                 tempImg.setOrigin(0.5, 0.5);
                                 this.foregroundCanvas.draw(tempImg, centerX, centerY);
                                 tempImg.destroy();
                             } else {
-                                const tempRect = scene.add.rectangle(0, 0, 32, 32, 0x1E90FF);
+                                const tempRect = scene.add.rectangle(0, 0, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x1E90FF);
                                 tempRect.setOrigin(0.5, 0.5);
                                 this.foregroundCanvas.draw(tempRect, centerX, centerY);
                                 tempRect.destroy();
                             }
                         } else {
                             // Create visible sprite (when foregroundCanvas is disabled for location backgrounds)
-                            if (scene.textures.exists('tilesheet')) {
-                                const visual = scene.add.image(centerX, centerY, 'tilesheet', 2);
-                                visual.setTint(0x1E90FF);
-                                visual.setDepth(0); // In front of background (depth -10)
+                            if (this.aiTilesAvailable && scene.textures.exists('tile_platform')) {
+                                const visual = scene.add.image(centerX, centerY, 'tile_platform');
+                                visual.setDisplaySize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
+                                visual.setDepth(0);
                                 visual.setScrollFactor(1, 1);
                             } else {
-                                const visual = scene.add.rectangle(centerX, centerY, 32, 32, 0x1E90FF);
+                                const visual = scene.add.rectangle(centerX, centerY, CONFIG.TILE_SIZE, CONFIG.TILE_SIZE, 0x1E90FF);
                                 visual.setDepth(0); // In front of background (depth -10)
                                 visual.setScrollFactor(1, 1);
                             }
                         }
                         break;
                     case 'C': // Cat Enemy
-                        const enemy = this.enemies.create(x + 16, y + 16, 'cat', 0);
-                        enemy.setScale(0.4); // Adjusted scale for better visibility
+                        // Check if cat texture exists before creating enemy
+                        if (!scene.textures.exists('cat')) {
+                            console.warn(`Game: Cannot create cat enemy at (${x}, ${y}) - 'cat' texture not found`);
+                            break;
+                        }
+                        const enemy = this.enemies.create(x + (CONFIG.TILE_SIZE / 2), y, 'cat', 0);
+                        if (!enemy) {
+                            console.error(`Game: Failed to create cat enemy at (${x}, ${y})`);
+                            break;
+                        }
+                        // No scaling needed - cat sprite sheet uses universal tile size (64x64 per frame)
                         enemy.setBounce(0.2);
-                        enemy.setCollideWorldBounds(false);
+                        enemy.setCollideWorldBounds(true);
                         enemy.setDepth(1); // Above background (depth -10) and tiles (depth 0)
+                        enemy.setVisible(true); // Ensure cat is visible
+                        enemy.setAlpha(1.0); // Ensure fully opaque
                         const dir = Math.random() > 0.5 ? 1 : -1;
-                        enemy.setVelocityX(60 * dir);
+                        // Velocity based on tile size: 1.25 tiles per second (80px/s at 64px tiles)
+                        enemy.setVelocityX(CONFIG.TILE_SIZE * 1.25 * dir);
                         enemy.setData('direction', dir);
                         enemy.setData('state', 'walking'); // walking, attacking, dying, dead
                         enemy.setData('attackCooldown', 0);
+                        enemy.setData('isAttacking', false);
+                        enemy.setData('attackDamageWindow', false);
                         enemy.setData('lastWallCheck', 0);
-                        // Set collision box - adjust for cat sprite size
-                        enemy.body.setSize(50, 60);
-                        enemy.body.setOffset(20, 15);
-                        enemy.anims.play(dir > 0 ? 'cat-walk-right' : 'cat-walk-left');
+                        // Set collision box using universal tile size
+                        // Cat sprite is 64x64, use 75% for collision box (48px) with 12.5% offset (8px)
+                        enemy.body.setSize(CONFIG.TILE_SIZE * 0.75, CONFIG.TILE_SIZE * 0.75);
+                        enemy.body.setOffset(CONFIG.TILE_SIZE * 0.125, CONFIG.TILE_SIZE * 0.125);
+                        // Only play animation if it exists and sprite sheet is ready
+                        const animKey = dir > 0 ? 'cat-walk-right' : 'cat-walk-left';
+                        if (scene.anims.exists(animKey) && scene.textures.exists('cat')) {
+                            enemy.anims.play(animKey);
+                        } else {
+                            console.warn(`Game: Cat animation '${animKey}' not available, cat may not animate`);
+                        }
+                        console.log(`Game: Created cat enemy at (${x + (CONFIG.TILE_SIZE / 2)}, ${y}), texture exists: ${scene.textures.exists('cat')}`);
                         break;
                     case 'O': // Treat
                         // Physics body for collectible
@@ -1158,21 +1497,17 @@ class Game {
                         if (this.aiTilesAvailable && scene.textures.exists('tile_treat')) {
                             treat = this.collectibles.create(centerX, centerY, 'tile_treat');
                             treat.setData('type', 'treat');
-                            // CRITICAL: Scale down from 1024x1024 to 32x32 pixels
-                            treat.setDisplaySize(32, 32);
+                            // CRITICAL: Scale down from 1024x1024 to tile size pixels
+                            treat.setDisplaySize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
                             treat.setOrigin(0.5, 0.5);
                             treat.setDepth(1); // Above background (depth -10) and tiles (depth 0)
-                        } else if (scene.textures.exists('tilesheet')) {
-                            treat = this.collectibles.create(centerX, centerY, 'tilesheet', 5);
-                            treat.setTint(0xFFD700);
-                            treat.setData('type', 'treat');
-                            treat.setScale(0.5);
-                            treat.setDepth(1); // Above background (depth -10) and tiles (depth 0)
                         } else {
-                            treat = scene.add.circle(centerX, centerY, 12, 0xFFD700);
+                            // Use colored rectangle for treat visual
+                            treat = scene.add.rectangle(centerX, centerY, 24, 24, 0xFFD700);
                             scene.physics.add.existing(treat, true);
                             this.collectibles.add(treat);
                             treat.setData('type', 'treat');
+                            treat.setScale(0.5);
                             treat.setDepth(1); // Above background (depth -10) and tiles (depth 0)
                         }
                         break;
@@ -1182,16 +1517,12 @@ class Game {
                         if (this.aiTilesAvailable && scene.textures.exists('tile_bone')) {
                             bone = this.collectibles.create(centerX, centerY, 'tile_bone');
                             bone.setData('type', 'bone');
-                            // CRITICAL: Scale down from 1024x1024 to 32x32 pixels
-                            bone.setDisplaySize(32, 32);
+                            // CRITICAL: Scale down from 1024x1024 to tile size pixels
+                            bone.setDisplaySize(CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
                             bone.setOrigin(0.5, 0.5);
                             bone.setDepth(1); // Above background (depth -10) and tiles (depth 0)
-                        } else if (scene.textures.exists('tilesheet')) {
-                            bone = this.collectibles.create(centerX, centerY, 'tilesheet', 6);
-                            bone.setTint(0xFFFFFF);
-                            bone.setData('type', 'bone');
-                            bone.setDepth(1); // Above background (depth -10) and tiles (depth 0)
                         } else {
+                            // Use colored rectangle for bone visual
                             bone = scene.add.rectangle(centerX, centerY, 24, 12, 0xFFFFFF);
                             scene.physics.add.existing(bone, true);
                             this.collectibles.add(bone);
@@ -1200,7 +1531,7 @@ class Game {
                         }
                         break;
                     case '@': // Spawn
-                        if (this.player) this.player.setPosition(x + 16, y + 16);
+                        if (this.player) this.player.setPosition(x + (CONFIG.TILE_SIZE / 2), y + (CONFIG.TILE_SIZE / 2));
                         break;
                     case '.': // Empty space - transparent, background shows through
                     case ' ': // Space - also transparent
@@ -1271,11 +1602,74 @@ class Game {
         }
         
         // Update World Bounds and Camera based on final level size (camera was already set up earlier for scrolling)
-        console.log(`Game: Level size: ${actualWidth}x${levelHeight + yOffset}`);
-        scene.physics.world.setBounds(0, 0, actualWidth, levelHeight + yOffset);
-        scene.cameras.main.setBounds(0, 0, actualWidth, levelHeight + yOffset);
+        // The ground platform should be at the bottom of the last row of content
+        // Last row is at index (rows.length - 1), positioned at: (rows.length - 1) * tileSize + yOffset
+        // The bottom edge of the last row is at: rows.length * tileSize + yOffset
+        // Ground platform center should be at: rows.length * tileSize + yOffset - tileSize/2
+        const lastRowIndex = rows.length - 1;
+        const lastRowY = lastRowIndex * tileSize + yOffset;
+        const lastRowBottom = rows.length * tileSize + yOffset;
+        const groundY = lastRowBottom - CONFIG.TILE_SIZE / 2;
+        
+        // World bounds should match the actual level content area
+        // For 8 rows (512px), level matches viewport exactly, so worldBoundsHeight = CONFIG.GAME_HEIGHT
+        // For levels taller than viewport, use level height. For smaller levels, use viewport height.
+        const worldBoundsHeight = Math.max(actualLevelHeight + yOffset, CONFIG.GAME_HEIGHT);
+        
+        console.log(`Game: Level size: ${actualWidth}x${actualLevelHeight}, Canvas: ${actualWidth}x${canvasHeight}`);
+        console.log(`Game: Last row (index ${lastRowIndex}) at y=${lastRowY}, bottom at y=${lastRowBottom}`);
+        console.log(`Game: Ground platform at y=${groundY}, World bounds height: ${worldBoundsHeight}`);
+        
+        // Set world bounds with collision enabled on all sides
+        // Use worldBoundsHeight to ensure camera can't go below visible area
+        scene.physics.world.setBounds(0, 0, actualWidth, worldBoundsHeight, true, true, true, true);
+        scene.cameras.main.setBounds(0, 0, actualWidth, worldBoundsHeight);
+        
+        // Ensure camera viewport shows the bottom of the level when at max scroll
+        // The camera viewport height is CONFIG.GAME_HEIGHT, so max camera Y should be worldBoundsHeight - CONFIG.GAME_HEIGHT
+        const maxCameraY = Math.max(0, worldBoundsHeight - CONFIG.GAME_HEIGHT);
+        console.log(`Game: Camera can scroll from y=0 to y=${maxCameraY}, viewport height=${CONFIG.GAME_HEIGHT}`);
+        
+        // Update camera follow to ensure it respects bounds and doesn't allow scrolling below visible level
+        if (this.player) {
+            scene.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+            // Set deadzone to keep player centered in viewport
+            scene.cameras.main.setDeadzone(0, 0);
+            // Ensure camera respects bounds
+            scene.cameras.main.setBounds(0, 0, actualWidth, worldBoundsHeight);
+        }
+        
+        // Ensure player and enemies have world bounds collision enabled
+        if (this.player) {
+            this.player.setCollideWorldBounds(true);
+        }
+        if (this.enemies) {
+            this.enemies.children.entries.forEach(enemy => {
+                if (enemy && enemy.active) {
+                    enemy.setCollideWorldBounds(true);
+                }
+            });
+        }
+        
         // Camera follow was already set up earlier to allow background scrolling during tile loading
         // Just ensure it's still active (don't call startFollow again as it may reset)
+
+        // Create a ground platform at the bottom of the ACTUAL level content (not canvas)
+        // This prevents falling through the visible bottom of the level
+        const groundPlatform = scene.add.rectangle(actualWidth / 2, groundY, actualWidth, CONFIG.TILE_SIZE, 0x8B4513);
+        // Add physics as static (true parameter makes it immovable automatically)
+        scene.physics.add.existing(groundPlatform, true);
+        this.platforms.add(groundPlatform);
+        groundPlatform.setVisible(false); // Invisible collision box
+        groundPlatform.setDepth(-1); // Behind everything
+        // Static bodies are automatically immovable, but ensure body exists
+        if (groundPlatform.body) {
+            // Static bodies don't need setImmovable, but we can set it if the method exists
+            if (typeof groundPlatform.body.setImmovable === 'function') {
+                groundPlatform.body.setImmovable(true);
+            }
+        }
+        console.log(`Game: Created ground platform at y=${groundY} (bottom of actual level content) to prevent falling`);
 
         // Add collisions
         scene.physics.add.collider(this.player, this.platforms);
@@ -1290,17 +1684,38 @@ class Game {
     /**
      * Update background when it becomes available (called after async generation)
      */
-    updateBackground() {
+    async updateBackground() {
         if (!this.currentScene) {
             console.warn('Game: Cannot update background - no scene available');
             return;
         }
         
-        const scene = this.currentScene;
+        // Guard against redundant updates
+        if (this.isUpdatingBackground) {
+            console.log('Game: Background update already in progress, skipping');
+            return;
+        }
+        
+        this.isUpdatingBackground = true;
+        
+        try {
+            const scene = this.currentScene;
         const locationBg = window.locationBackground || localStorage.getItem('location_background');
         
-        if (!locationBg) {
-            console.log('Game: updateBackground called but no background available yet');
+        // Get frames array if available (version 5+)
+        const locationBgFrames = window.locationBackgroundFrames || (() => {
+            try {
+                const framesStr = localStorage.getItem('location_background_frames');
+                return framesStr ? JSON.parse(framesStr) : null;
+            } catch (e) {
+                return null;
+            }
+        })();
+        
+        const useFramesArray = locationBgFrames && locationBgFrames.length >= 2;
+        
+        if (!locationBg && !useFramesArray) {
+            console.log('Game: updateBackground called but no background or frames available yet');
             return;
         }
         
@@ -1312,7 +1727,6 @@ class Game {
         
         console.log('Game: Updating background - background became available after game start');
         
-        // Re-run the background setup code
         // Get level dimensions
         const levelData = window.LEVELS ? window.LEVELS[0] : null;
         if (!levelData) {
@@ -1321,16 +1735,13 @@ class Game {
         }
         
         const rows = levelData.csv.trim().split('\n');
-        const tileSize = 32;
+        const tileSize = CONFIG.TILE_SIZE;
         const levelHeight = rows.length * tileSize;
         const yOffset = Math.max(0, CONFIG.GAME_HEIGHT - levelHeight);
         const maxCols = Math.max(...rows.map(r => r.length));
         const actualWidth = maxCols * tileSize;
         const canvasHeight = levelHeight + yOffset;
         
-        // Use the same background setup logic from generateLevelFromCSV
-        // This is a simplified version that just sets up the background sprites
-        try {
             // Get weather metadata
             let weatherMeta = null;
             try {
@@ -1342,102 +1753,168 @@ class Game {
                 console.warn('Could not parse background metadata:', e);
             }
             
-            const bgKey = 'location_background_texture';
-            if (!scene.textures.exists(bgKey)) {
-                scene.textures.addBase64(bgKey, locationBg);
+            let frameWidth = 512;
+            let actualBgHeight = 512;
+            let isAnimated = false;
+            let bgKey = 'location_background_texture';
+            
+            if (useFramesArray) {
+                console.log(`Game: updateBackground - Loading ${locationBgFrames.length} background frames as separate textures...`);
+                isAnimated = true;
+                
+                // Load each frame as a separate texture
+                for (let i = 0; i < locationBgFrames.length; i++) {
+                    const frameKey = `bg_frame_${i}`;
+                    if (!scene.textures.exists(frameKey)) {
+                        scene.textures.addBase64(frameKey, locationBgFrames[i]);
+                    }
+                }
+                
+                // Wait for all frames to load
+                await new Promise((resolve) => {
+                    let attempts = 0;
+                    const maxAttempts = 100;
+                    const checkFrames = () => {
+                        attempts++;
+                        if (attempts > maxAttempts) {
+                            console.warn('Timeout waiting for background frames');
+                            resolve();
+                            return;
+                        }
+                        let allLoaded = true;
+                        for (let i = 0; i < locationBgFrames.length; i++) {
+                            if (!scene.textures.exists(`bg_frame_${i}`)) {
+                                allLoaded = false;
+                                break;
+                            }
+                        }
+                        if (allLoaded) {
+                            const texture = scene.textures.get('bg_frame_0');
+                            if (texture && texture.source && texture.source.length > 0) {
+                                frameWidth = texture.source[0].width || 512;
+                                actualBgHeight = texture.source[0].height || 512;
+                            }
+                            resolve();
+                            return;
+                        }
+                        setTimeout(checkFrames, 50);
+                    };
+                    checkFrames();
+                });
+            } else if (locationBg) {
+                // Fallback: Use spritesheet (old version)
+                if (typeof locationBg !== 'string') {
+                    console.error('Game: locationBg is not a string!', locationBg);
+                    return;
+                }
+                
+                if (!scene.textures.exists(bgKey)) {
+                    scene.textures.addBase64(bgKey, locationBg);
+                }
+                
+                await new Promise((resolve) => {
+                    let attempts = 0;
+                    const maxAttempts = 100;
+                    const checkTexture = () => {
+                        attempts++;
+                        if (attempts > maxAttempts) {
+                            console.warn('Timeout waiting for background texture');
+                            resolve();
+                            return;
+                        }
+                        const textureKey = 'location_background_texture';
+                        if (scene.textures.exists(textureKey)) {
+                            const texture = scene.textures.get(textureKey);
+                            if (texture && texture.source && texture.source.length > 0) {
+                                const source = texture.source[0];
+                                if (source.width > 0) {
+                                    const actualBgWidth = source.width;
+                                    actualBgHeight = source.height;
+                                    frameWidth = (actualBgWidth >= 1800 && actualBgWidth <= 2200) ? actualBgWidth / 4 : actualBgWidth;
+                                    isAnimated = (actualBgWidth >= 1800 && actualBgWidth <= 2200);
+                                    resolve();
+                                    return;
+                                }
+                            }
+                        }
+                        setTimeout(checkTexture, 50);
+                    };
+                    checkTexture();
+                });
             }
             
-            // Wait a bit for texture to load, then set up sprites
-            setTimeout(() => {
-                if (!scene.textures.exists(bgKey)) {
-                    console.warn('Game: Background texture not ready after update');
-                    return;
-                }
-                
+            // Create spritesheet if animated and using spritesheet logic
+            if (isAnimated && !useFramesArray && !scene.textures.exists('bg_spritesheet')) {
                 const texture = scene.textures.get(bgKey);
-                if (!texture || !texture.source || texture.source.length === 0) {
-                    console.warn('Game: Background texture source not available');
-                    return;
-                }
-                
-                const source = texture.source[0];
-                const actualBgWidth = source.width;
-                const actualBgHeight = source.height;
-                const frameWidth = actualBgWidth >= 51200 ? actualBgWidth / 4 : actualBgWidth;
-                const isAnimated = actualBgWidth >= 51200;
-                
-                // Create sprite sheet if animated
-                if (isAnimated && !scene.textures.exists('bg_spritesheet')) {
-                    scene.textures.addSpriteSheet('bg_spritesheet', source.image, {
+                if (texture && texture.source && texture.source.length > 0) {
+                    scene.textures.addSpriteSheet('bg_spritesheet', texture.source[0].image, {
                         frameWidth: frameWidth,
-                        frameHeight: actualBgHeight,
-                        startFrame: 0,
-                        endFrame: 3
+                        frameHeight: actualBgHeight
                     });
                 }
+            }
+            
+            // Determine animation speed (Frames Per Second)
+            // With 8 frames, a speed of 2 means a full cycle every 4 seconds.
+            let animSpeed = 2; 
+            if (weatherMeta && weatherMeta.timeWeather) {
+                const weather = weatherMeta.timeWeather;
+                if (weather.season === 'winter' || weather.timeOfDay === 'night') animSpeed = 1.5;
+                else if (weather.season === 'spring' || weather.season === 'summer') animSpeed = 2.5;
+            }
+            
+            // Create background sprites
+            // Scale to fit VIEWPORT (512x512), not canvas height
+            const scaleY = CONFIG.GAME_HEIGHT / actualBgHeight;
+            const scaleX = scaleY; // Use uniform scaling to fit height and tile horizontally
+            const scaledTileWidth = frameWidth * scaleX;
+            const tilesNeeded = Math.ceil(actualWidth / scaledTileWidth);
+            
+            if (!this.backgroundSprites) this.backgroundSprites = [];
+            this.backgroundSprites.forEach(s => s && s.active && s.destroy());
+            this.backgroundSprites = [];
+            
+            for (let i = 0; i < tilesNeeded; i++) {
+                const scaledTileWidth = Math.round(frameWidth * scaleX);
+                const xPos = i * scaledTileWidth;
+                let bgSprite;
                 
-                // Create animation
-                let animSpeed = 8;
-                if (weatherMeta && weatherMeta.timeWeather) {
-                    const weather = weatherMeta.timeWeather;
-                    if (weather.season === 'winter' || weather.timeOfDay === 'night') {
-                        animSpeed = 6;
-                    } else if (weather.season === 'spring' || weather.season === 'summer') {
-                        animSpeed = 10;
+                if (useFramesArray) {
+                    // Cyclic animation using separate frames
+                    bgSprite = scene.add.image(xPos, 0, 'bg_frame_0');
+                    bgSprite.setData('frameCount', locationBgFrames.length);
+                    bgSprite.setData('currentFrame', 0);
+                    bgSprite.setData('lastFrameUpdate', Date.now());
+                    bgSprite.setData('frameRate', 1000 / animSpeed);
+                } else if (isAnimated && scene.textures.exists('bg_spritesheet')) {
+                    bgSprite = scene.add.sprite(xPos, 0, 'bg_spritesheet', 0);
+                    // Create animation if needed
+                    if (!scene.anims.exists('bg_animate')) {
+                        scene.anims.create({
+                            key: 'bg_animate',
+                            frames: scene.anims.generateFrameNumbers('bg_spritesheet', { start: 0, end: 3 }),
+                            frameRate: animSpeed,
+                            repeat: -1
+                        });
                     }
+                    bgSprite.play('bg_animate');
+                } else {
+                    bgSprite = scene.add.image(xPos, 0, bgKey);
                 }
                 
-                if (isAnimated && scene.textures.exists('bg_spritesheet') && !scene.anims.exists('bg_animate')) {
-                    scene.anims.create({
-                        key: 'bg_animate',
-                        frames: scene.anims.generateFrameNumbers('bg_spritesheet', { start: 0, end: 3 }),
-                        frameRate: animSpeed,
-                        repeat: -1
-                    });
-                }
-                
-                // Create background sprites
-                const bgTileWidth = frameWidth;
-                const bgTileHeight = actualBgHeight;
-                const tilesNeeded = Math.ceil(actualWidth / bgTileWidth);
-                const scaleY = canvasHeight / bgTileHeight;
-                
-                if (!this.backgroundSprites) {
-                    this.backgroundSprites = [];
-                }
-                
-                this.backgroundSprites.forEach(sprite => {
-                    if (sprite && sprite.active) {
-                        sprite.destroy();
-                    }
-                });
-                this.backgroundSprites = [];
-                
-                const spriteKey = isAnimated ? 'bg_spritesheet' : bgKey;
-                
-                for (let i = 0; i < tilesNeeded; i++) {
-                    const bgSprite = isAnimated 
-                        ? scene.add.sprite(i * bgTileWidth, 0, spriteKey, 0)
-                        : scene.add.image(i * bgTileWidth, 0, spriteKey);
-                    
-                    bgSprite.setOrigin(0, 0);
-                    bgSprite.setDisplaySize(bgTileWidth, bgTileHeight * scaleY);
-                    bgSprite.setDepth(-10);
-                    bgSprite.setScrollFactor(1, 1);
-                    bgSprite.setVisible(true);
-                    bgSprite.setAlpha(1.0);
-                    
-                    if (isAnimated && scene.anims.exists('bg_animate')) {
-                        bgSprite.play('bg_animate');
-                    }
-                    
-                    this.backgroundSprites.push(bgSprite);
-                }
-                
-                console.log(`Game: Background updated successfully (${tilesNeeded} tiles, ${isAnimated ? 'animated' : 'static'})`);
-            }, 100);
+                bgSprite.setOrigin(0, 0);
+                // Background should be exactly viewport height (512px), not scaled to level height
+                bgSprite.setDisplaySize(scaledTileWidth, CONFIG.GAME_HEIGHT);
+                bgSprite.setDepth(-10);
+                bgSprite.setScrollFactor(1, 1);
+                this.backgroundSprites.push(bgSprite);
+            }
+            
+            console.log(`Game: Internal background updated successfully (${tilesNeeded} tiles, ${isAnimated ? 'animated' : 'static'})`);
         } catch (error) {
             console.error('Game: Error updating background:', error);
+        } finally {
+            this.isUpdatingBackground = false;
         }
     }
 
@@ -1463,7 +1940,7 @@ class Game {
         this.collectibles = scene.physics.add.group();
         
         this.levelData.collectibles.forEach(pos => {
-            const collectible = this.collectibles.create(pos.x * 64, pos.y * 64, 'platform');
+            const collectible = this.collectibles.create(pos.x * CONFIG.TILE_SIZE, pos.y * CONFIG.TILE_SIZE, 'platform');
             collectible.setTint(0xffff00);
             collectible.setScale(0.3);
             collectible.body.setSize(20, 20);
@@ -1476,24 +1953,64 @@ class Game {
         this.enemies = scene.physics.add.group();
 
         this.levelData.enemies.forEach(enemyData => {
-            const enemy = this.enemies.create(enemyData.x * 64, enemyData.y * 64, 'enemies', 0); 
-            enemy.body.setSize(40, 40); 
-            enemy.body.setOffset(12, 24); 
-            enemy.setVelocityX(enemyData.type === 'moving' ? -80 : 0);
+            if (!scene.textures.exists('cat')) {
+                console.warn(`Game: Cannot create cat enemy - 'cat' texture not found`);
+                return;
+            }
+            const enemy = this.enemies.create(enemyData.x * CONFIG.TILE_SIZE, enemyData.y * CONFIG.TILE_SIZE, 'cat', 0);
+            if (!enemy) {
+                console.error(`Game: Failed to create cat enemy`);
+                return;
+            }
+            // No scaling needed - cat sprite sheet uses universal tile size (64x64 per frame)
+            enemy.setVisible(true);
+            enemy.setAlpha(1.0);
+            // Set collision box using universal tile size (75% of tile, 12.5% offset)
+            enemy.body.setSize(CONFIG.TILE_SIZE * 0.75, CONFIG.TILE_SIZE * 0.75);
+            enemy.body.setOffset(CONFIG.TILE_SIZE * 0.125, CONFIG.TILE_SIZE * 0.125); 
+            // Velocity based on tile size: 1.25 tiles per second
+            const velocity = enemyData.type === 'moving' ? -(CONFIG.TILE_SIZE * 1.25) : 0;
+            enemy.setVelocityX(velocity);
             enemy.setCollideWorldBounds(true);
+            enemy.body.onWorldBounds = true; // Trigger events if needed
             enemy.setBounce(1, 0);
+            
+            // Initialize enemy data
+            const direction = velocity > 0 ? 1 : (velocity < 0 ? -1 : 0);
+            enemy.setData('direction', direction);
+            enemy.setData('state', velocity !== 0 ? 'walking' : 'idle');
+            enemy.setData('attackCooldown', 0);
+            enemy.setData('isAttacking', false);
+            enemy.setData('attackDamageWindow', false);
+            
+            // Only play animations if they exist
+            if (velocity < 0 && scene.anims.exists('cat-walk-left')) {
+                enemy.anims.play('cat-walk-left');
+            } else if (velocity > 0 && scene.anims.exists('cat-walk-right')) {
+                enemy.anims.play('cat-walk-right');
+            } else if (scene.anims.exists('cat-idle')) {
+                enemy.anims.play('cat-idle');
+            }
         });
 
+        // Ensure colliders are set up
         scene.physics.add.collider(this.enemies, this.platforms);
         scene.physics.add.overlap(this.player, this.enemies, this.hitEnemy, null, this);
+        
     }
 
     createAnimations(scene) {
         // Only if not exists
         if (scene.anims.exists('walk-right')) return;
         
+        // Ensure sprite sheets exist before creating animations
+        if (!scene.textures.exists('playerSprite')) {
+            console.warn('Game: Cannot create player animations - playerSprite texture not found');
+            return;
+        }
+        
         // Player animations
-        // Walking right
+        // Walking right (Reference for both directions)
         scene.anims.create({
             key: 'walk-right',
             frames: scene.anims.generateFrameNumbers('playerSprite', { start: 0, end: 3 }),
@@ -1501,7 +2018,7 @@ class Game {
             repeat: -1
         });
 
-        // Walking left
+        // Walking left (Row 2: frames 4-7)
         scene.anims.create({
             key: 'walk-left',
             frames: scene.anims.generateFrameNumbers('playerSprite', { start: 4, end: 7 }),
@@ -1526,55 +2043,41 @@ class Game {
         });
 
         // CAT ENEMY ANIMATIONS
-        // Cat.png: 870x674 pixels, 6 columns x 6 rows
-        // Frame size: 870/6 = 145px wide, 674/6 ≈ 112px tall
-        // Row 0 (frames 0-5): Idle - 6 frames
-        scene.anims.create({
-            key: 'cat-idle',
-            frames: scene.anims.generateFrameNumbers('cat', { start: 0, end: 5 }),
-            frameRate: 8,
-            repeat: -1
-        });
+        // Only create if cat sprite sheet exists
+        if (scene.textures.exists('cat')) {
+            // Row 1 (frames 0-3): Walk - Used for both directions
+            scene.anims.create({
+                key: 'cat-walk-right',
+                frames: scene.anims.generateFrameNumbers('cat', { start: 0, end: 3 }),
+                frameRate: 10,
+                repeat: -1
+            });
 
-        // Row 1 (frames 6-11): Walk Right - 6 frames
-        scene.anims.create({
-            key: 'cat-walk-right',
-            frames: scene.anims.generateFrameNumbers('cat', { start: 6, end: 11 }),
-            frameRate: 10,
-            repeat: -1
-        });
+            scene.anims.create({
+                key: 'cat-walk-left',
+                frames: scene.anims.generateFrameNumbers('cat', { start: 4, end: 7 }), // Row 2: Walk Left (frames 4-7)
+                frameRate: 10,
+                repeat: -1
+            });
 
-        // Row 2 (frames 12-17): Walk Left - 6 frames
-        scene.anims.create({
-            key: 'cat-walk-left',
-            frames: scene.anims.generateFrameNumbers('cat', { start: 12, end: 17 }),
-            frameRate: 10,
-            repeat: -1
-        });
+            // Row 3 (frames 8-11): Attack/Action - 4 frames
+            scene.anims.create({
+                key: 'cat-attack',
+                frames: scene.anims.generateFrameNumbers('cat', { start: 8, end: 11 }),
+                frameRate: 10,
+                repeat: -1
+            });
 
-        // Row 3 (frames 18-23): Attack Right - 6 frames
-        scene.anims.create({
-            key: 'cat-attack-right',
-            frames: scene.anims.generateFrameNumbers('cat', { start: 18, end: 23 }),
-            frameRate: 12,
-            repeat: 0
-        });
-
-        // Row 4 (frames 24-29): Attack Left - 6 frames
-        scene.anims.create({
-            key: 'cat-attack-left',
-            frames: scene.anims.generateFrameNumbers('cat', { start: 24, end: 29 }),
-            frameRate: 12,
-            repeat: 0
-        });
-
-        // Row 5 (frames 30-35): Death - 6 frames
-        scene.anims.create({
-            key: 'cat-death',
-            frames: scene.anims.generateFrameNumbers('cat', { start: 30, end: 35 }),
-            frameRate: 10,
-            repeat: 0
-        });
+            // Row 4 (frames 12-15): Idle - 4 frames
+            scene.anims.create({
+                key: 'cat-idle',
+                frames: scene.anims.generateFrameNumbers('cat', { start: 12, end: 15 }),
+                frameRate: 8,
+                repeat: -1
+            });
+        } else {
+            console.warn('Game: Cannot create cat animations - cat texture not found');
+        }
 
         // Set default animation
         if (this.player) this.player.anims.play('idle');
@@ -1584,21 +2087,56 @@ class Game {
         this.enemies = scene.physics.add.group();
 
         // Create enemies on platforms using the sprite
+        // Create enemies on platforms using the 'cat' key
+        if (!scene.textures.exists('cat')) {
+            console.warn('Game: Cannot create enemies - cat texture not found');
+            return;
+        }
         // Enemy 1
-        const enemy1 = this.enemies.create(550, 350, 'enemies', 0);
-        enemy1.body.setSize(40, 40);
-        enemy1.body.setOffset(12, 24);
-        enemy1.setVelocityX(-80);
+        const enemy1 = this.enemies.create(550, 350, 'cat', 0);
+        if (!enemy1) {
+            console.error('Game: Failed to create enemy1');
+            return;
+        }
+        // No scaling needed - cat sprite sheet uses universal tile size (64x64 per frame)
+        enemy1.setVisible(true);
+        enemy1.setAlpha(1.0);
+        // Set collision box using universal tile size (75% of tile, 12.5% offset)
+        enemy1.body.setSize(CONFIG.TILE_SIZE * 0.75, CONFIG.TILE_SIZE * 0.75);
+        enemy1.body.setOffset(CONFIG.TILE_SIZE * 0.125, CONFIG.TILE_SIZE * 0.125);
+        // Velocity based on tile size: 1.25 tiles per second
+        enemy1.setVelocityX(-(CONFIG.TILE_SIZE * 1.25));
         enemy1.setCollideWorldBounds(true);
         enemy1.setBounce(1, 0);
+        enemy1.setData('direction', -1);
+        enemy1.setData('state', 'walking');
+        enemy1.setData('attackCooldown', 0);
+        enemy1.setData('isAttacking', false);
+        enemy1.setData('attackDamageWindow', false);
+        enemy1.anims.play('cat-walk-left');
 
         // Enemy 2
-        const enemy2 = this.enemies.create(150, 200, 'enemies', 2); 
-        enemy2.body.setSize(40, 40);
-        enemy2.body.setOffset(12, 24);
-        enemy2.setVelocityX(80);
+        const enemy2 = this.enemies.create(150, 200, 'cat', 0);
+        if (!enemy2) {
+            console.error('Game: Failed to create enemy2');
+            return;
+        }
+        // No scaling needed - cat sprite sheet uses universal tile size (64x64 per frame)
+        enemy2.setVisible(true);
+        enemy2.setAlpha(1.0);
+        // Set collision box using universal tile size (75% of tile, 12.5% offset)
+        enemy2.body.setSize(CONFIG.TILE_SIZE * 0.75, CONFIG.TILE_SIZE * 0.75);
+        enemy2.body.setOffset(CONFIG.TILE_SIZE * 0.125, CONFIG.TILE_SIZE * 0.125);
+        // Velocity based on tile size: 1.25 tiles per second
+        enemy2.setVelocityX(CONFIG.TILE_SIZE * 1.25);
         enemy2.setCollideWorldBounds(true);
         enemy2.setBounce(1, 0);
+        enemy2.setData('direction', 1);
+        enemy2.setData('state', 'walking');
+        enemy2.setData('attackCooldown', 0);
+        enemy2.setData('isAttacking', false);
+        enemy2.setData('attackDamageWindow', false);
+        enemy2.anims.play('cat-walk-right');
 
         // Collision with platforms
         scene.physics.add.collider(this.enemies, this.platforms);
@@ -1611,10 +2149,10 @@ class Game {
         // Create collectible graphic (coin/star)
         const collectibleGraphics = scene.add.graphics();
         collectibleGraphics.fillStyle(0xffd700);
-        collectibleGraphics.fillCircle(16, 16, 12);
+        collectibleGraphics.fillCircle(CONFIG.TILE_SIZE / 2, CONFIG.TILE_SIZE / 2, CONFIG.TILE_SIZE * 0.1875);
         collectibleGraphics.fillStyle(0xffed4e);
-        collectibleGraphics.fillCircle(16, 16, 8);
-        collectibleGraphics.generateTexture('collectible', 32, 32);
+        collectibleGraphics.fillCircle(CONFIG.TILE_SIZE / 2, CONFIG.TILE_SIZE / 2, CONFIG.TILE_SIZE * 0.125);
+        collectibleGraphics.generateTexture('collectible', CONFIG.TILE_SIZE, CONFIG.TILE_SIZE);
         collectibleGraphics.destroy();
 
         this.collectibles = scene.physics.add.group();
@@ -1640,6 +2178,25 @@ class Game {
 
     update(scene) {
         try {
+            // Update background animations if using frame array
+            if (this.backgroundSprites) {
+                const now = Date.now();
+                this.backgroundSprites.forEach(sprite => {
+                    const frameCount = sprite.getData('frameCount');
+                    if (frameCount) {
+                        const lastUpdate = sprite.getData('lastFrameUpdate');
+                        const frameRate = sprite.getData('frameRate');
+                        if (now - lastUpdate > frameRate) {
+                            let currentFrame = sprite.getData('currentFrame');
+                            currentFrame = (currentFrame + 1) % frameCount;
+                            sprite.setTexture(`bg_frame_${currentFrame}`);
+                            sprite.setData('currentFrame', currentFrame);
+                            sprite.setData('lastFrameUpdate', now);
+                        }
+                    }
+                });
+            }
+
             // Periodically check if background became available (fallback if updateBackground wasn't called)
             if (scene && !this.backgroundSprites?.length) {
                 const locationBg = window.locationBackground || localStorage.getItem('location_background');
@@ -1656,30 +2213,33 @@ class Game {
             
             if (!this.player || !this.player.body || !this.cursors) return;
             
-            // Player movement
-            // Player movement
-            const isOnGround = this.player.body.onFloor();
-            
+            const isOnGround = this.player.body.onFloor() || this.player.body.touching.down;
+
+            const frameSize = this.player.frameSize || CONFIG.TILE_SIZE;
+            const offsetX = (frameSize * (1 - 0.35)) / 2;
+
+            // Movement handling
             if (this.cursors.left.isDown) {
                 this.player.setVelocityX(-CONFIG.PLAYER_SPEED);
                 if (isOnGround) {
                     this.player.anims.play('walk-left', true);
+                    this.player.setOffset(offsetX, frameSize * 0.22);
                 }
-                // Don't flip X if we have a specific 'walk-left' animation row
-                this.player.setFlipX(false); 
+                // No flip needed - walk-left uses dedicated frames (row 2)
             } else if (this.cursors.right.isDown) {
                 this.player.setVelocityX(CONFIG.PLAYER_SPEED);
                 if (isOnGround) {
                     this.player.anims.play('walk-right', true);
+                    this.player.setOffset(offsetX, frameSize * 0.22);
                 }
-                this.player.setFlipX(false);
+                // No flip needed - walk-right uses dedicated frames (row 1)
             } else {
                 this.player.setVelocityX(0);
                 if (isOnGround) {
                     this.player.anims.play('idle', true);
+                    this.player.setOffset(offsetX, frameSize * 0.12);
                 }
             }
-
             // Jumping
             if ((this.cursors.up.isDown || this.spaceKey.isDown) && isOnGround) {
                 this.player.setVelocityY(CONFIG.JUMP_FORCE);
@@ -1691,57 +2251,167 @@ class Game {
                 this.player.anims.play('jump', true);
             }
 
-            // Check if player fell off
-            if (this.player.y > CONFIG.GAME_HEIGHT + 100) {
-                this.loseLife();
+            // Check if player fell off the map (use actual level bottom, accounting for yOffset)
+            const rows = this.currentCSVData ? this.currentCSVData.trim().split('\n') : [];
+            if (rows.length > 0) {
+                const tileSize = CONFIG.TILE_SIZE;
+                const levelHeight = rows.length * tileSize;
+                const yOffset = Math.max(0, CONFIG.GAME_HEIGHT - levelHeight);
+                const lastRowBottom = rows.length * tileSize + yOffset;
+                const actualLevelBottom = lastRowBottom;
+                const killZone = actualLevelBottom + 200; // Kill zone 200px below level bottom
+                
+                if (this.player.y > killZone) {
+                    console.warn(`Game: Player fell off map at y=${this.player.y}, level bottom=${actualLevelBottom}`);
+                    this.loseLife();
+                }
+                
+                // Also check if player is below visible level (safety check)
+                if (this.player.y > actualLevelBottom + 50) {
+                    // Reset player position to safe position above ground
+                    const spawnY = Math.min(100, actualLevelBottom - CONFIG.TILE_SIZE * 3);
+                    this.player.setPosition(this.player.x, spawnY);
+                    this.player.setVelocityY(0);
+                }
             }
 
+            // Check for enemies falling off map (use actual level bottom, accounting for yOffset)
+            if (this.enemies) {
+                // Calculate actual level bottom from stored CSV data
+                const rows = this.currentCSVData ? this.currentCSVData.trim().split('\n') : [];
+                if (rows.length > 0) {
+                    const tileSize = CONFIG.TILE_SIZE;
+                    const levelHeight = rows.length * tileSize;
+                    const yOffset = Math.max(0, CONFIG.GAME_HEIGHT - levelHeight);
+                    const lastRowBottom = rows.length * tileSize + yOffset;
+                    const actualLevelBottom = lastRowBottom;
+                    
+                    this.enemies.children.entries.forEach(cat => {
+                        if (!cat || !cat.active || cat.getData('state') === 'dead') return;
+                        
+                        // Safety check: if enemy falls too far, reset or destroy
+                        if (cat.y > actualLevelBottom + 200) {
+                            console.warn(`Game: Enemy fell off map at y=${cat.y}, destroying`);
+                            cat.destroy();
+                            return;
+                        } else if (cat.y > actualLevelBottom + 50) {
+                            // Reset to safe position above ground
+                            cat.y = actualLevelBottom - CONFIG.TILE_SIZE * 2;
+                            cat.setVelocityY(0);
+                        }
+                    });
+                }
+            }
+            
             // Update cat enemies
             if (this.enemies) {
                 this.enemies.children.entries.forEach(cat => {
                     if (!cat || !cat.active || cat.getData('state') === 'dead') return;
                     
-                    const state = cat.getData('state');
-                    const direction = cat.getData('direction');
-                    const attackCooldown = cat.getData('attackCooldown') || 0;
+                    const state = cat.getData('state') || 'walking';
+                    const velocity = cat.body.velocity.x;
+                    const direction = velocity > 0 ? 1 : (velocity < 0 ? -1 : 0);
                     
-                    // Update attack cooldown
-                    if (attackCooldown > 0) {
-                        cat.setData('attackCooldown', attackCooldown - 1);
-                    }
+                    // Simple state management if not set
+                    if (!cat.getData('state')) cat.setData('state', 'walking');
                     
-                    // Check if cat should attack (player nearby)
-                    if (state === 'walking' && attackCooldown === 0 && this.player) {
-                        const distance = Phaser.Math.Distance.Between(
-                            cat.x, cat.y,
-                            this.player.x, this.player.y
-                        );
-                        
-                        // Attack if player is within 150 pixels
-                        if (distance < 150) {
-                            cat.setData('state', 'attacking');
-                            cat.setVelocityX(0); // Stop moving during attack
-                            const attackAnim = direction > 0 ? 'cat-attack-right' : 'cat-attack-left';
-                            cat.anims.play(attackAnim);
-                            
-                            // Return to walking after attack animation completes
-                            cat.once('animationcomplete', () => {
-                                if (cat.active && cat.getData('state') === 'attacking') {
-                                    cat.setData('state', 'walking');
-                                    cat.setData('attackCooldown', 120); // 2 seconds cooldown at 60fps
-                                    cat.setVelocityX(60 * direction);
-                                    cat.anims.play(direction > 0 ? 'cat-walk-right' : 'cat-walk-left');
-                                }
-                            });
+                    // Update walking animation - use dedicated frames, no flipping needed
+                    if (state === 'walking' && velocity !== 0) {
+                        const animKey = velocity > 0 ? 'cat-walk-right' : 'cat-walk-left';
+                        if (scene.anims.exists(animKey) && cat.anims.currentAnim?.key !== animKey) {
+                            cat.anims.play(animKey, true);
+                        }
+                        // No setFlipX needed - we have dedicated walk-left frames (4-7)
+                    } else if (state === 'walking' && velocity === 0) {
+                        if (scene.anims.exists('cat-idle')) {
+                            cat.anims.play('cat-idle', true);
                         }
                     }
                     
-                    // Update walking animation based on direction
-                    if (state === 'walking' && cat.body.velocity.x !== 0) {
-                        const currentDir = cat.body.velocity.x > 0 ? 1 : -1;
-                        if (currentDir !== direction) {
-                            cat.setData('direction', currentDir);
-                            cat.anims.play(currentDir > 0 ? 'cat-walk-right' : 'cat-walk-left');
+                    // Enhanced attack logic with cooldown and range checking
+                    if (state === 'walking' && this.player && !cat.getData('isAttacking')) {
+                        // Check attack cooldown
+                        const attackCooldown = cat.getData('attackCooldown') || 0;
+                        if (attackCooldown > 0) {
+                            cat.setData('attackCooldown', attackCooldown - 1);
+                        } else {
+                            // Check if player is in attack range
+                            const dist = Phaser.Math.Distance.Between(cat.x, cat.y, this.player.x, this.player.y);
+                            const attackRange = 120; // Attack range in pixels
+                            
+                            // Check if player is in front of the cat (line of sight)
+                            const catDirection = cat.getData('direction') || (velocity > 0 ? 1 : -1);
+                            const toPlayerX = this.player.x - cat.x;
+                            const isInFront = (catDirection > 0 && toPlayerX > 0) || (catDirection < 0 && toPlayerX < 0);
+                            
+                            if (dist < attackRange && isInFront && !this.player.getData('invulnerable')) {
+                                // Start attack
+                                cat.setData('state', 'attacking');
+                                cat.setData('isAttacking', true);
+                                cat.setVelocityX(0);
+                                if (scene.anims.exists('cat-attack')) {
+                                    cat.anims.play('cat-attack', true);
+                                }
+                                
+                                // Set attack damage window (middle frames of attack animation)
+                                cat.setData('attackDamageWindow', true);
+                                
+                                // Check for damage during attack animation
+                                const attackCheck = this.currentScene.time.addEvent({
+                                    delay: 200, // Check after 200ms (mid-attack)
+                                    callback: () => {
+                                        if (cat.active && cat.getData('state') === 'attacking') {
+                                            const currentDist = Phaser.Math.Distance.Between(cat.x, cat.y, this.player.x, this.player.y);
+                                            if (currentDist < attackRange && !this.player.getData('invulnerable')) {
+                                                // Player is still in range - deal damage
+                                                this.loseLife();
+                                                // Make player briefly invulnerable
+                                                this.player.setData('invulnerable', true);
+                                                this.player.setTint(0xff0000);
+                                                this.currentScene.time.delayedCall(1000, () => {
+                                                    if (this.player && this.player.active) {
+                                                        this.player.setData('invulnerable', false);
+                                                        this.player.clearTint();
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    },
+                                    loop: false
+                                });
+                                
+                                // Handle attack completion
+                                cat.once('animationcomplete', (animation) => {
+                                    if (animation.key === 'cat-attack') {
+                                        cat.setData('state', 'walking');
+                                        cat.setData('isAttacking', false);
+                                        cat.setData('attackDamageWindow', false);
+                                        
+                                        // Set attack cooldown (2 seconds at 60fps = 120 frames)
+                                        cat.setData('attackCooldown', 120);
+                                        
+                                        // Resume movement - turn toward player if close, otherwise continue in direction
+                                        const finalDist = Phaser.Math.Distance.Between(cat.x, cat.y, this.player.x, this.player.y);
+                                        if (finalDist < 150) {
+                                            // Turn toward player
+                                            const toPlayer = this.player.x > cat.x ? 1 : -1;
+                                            cat.setData('direction', toPlayer);
+                                            // Velocity based on tile size: 1.25 tiles per second
+                                            cat.setVelocityX(CONFIG.TILE_SIZE * 1.25 * toPlayer);
+                                        } else {
+                                            // Continue in original direction
+                                            const dir = cat.getData('direction') || 1;
+                                            // Velocity based on tile size: 1.25 tiles per second
+                                            cat.setVelocityX(CONFIG.TILE_SIZE * 1.25 * dir);
+                                        }
+                                        
+                                        // Clean up attack check event
+                                        if (attackCheck) {
+                                            attackCheck.remove();
+                                        }
+                                    }
+                                });
+                            }
                         }
                     }
                 });
@@ -1756,13 +2426,14 @@ class Game {
     }
 
     enemyHitWall(enemy, wall) {
-        // When cat hits a wall, turn around
-        if (enemy.getData('state') === 'walking' || enemy.getData('state') === 'idle') {
-            const currentDir = enemy.getData('direction');
-            const newDir = -currentDir;
-            enemy.setData('direction', newDir);
-            enemy.setVelocityX(60 * newDir);
-            enemy.anims.play(newDir > 0 ? 'cat-walk-right' : 'cat-walk-left');
+        // When cat hits a wall or platform edge (handled by bounce), update animation
+        const velocity = enemy.body.velocity.x;
+        const scene = enemy.scene;
+        // Use dedicated frames, no flipping needed
+        if (velocity > 0 && scene && scene.anims.exists('cat-walk-right')) {
+            enemy.anims.play('cat-walk-right', true);
+        } else if (velocity < 0 && scene && scene.anims.exists('cat-walk-left')) {
+            enemy.anims.play('cat-walk-left', true);
         }
     }
 
@@ -1778,21 +2449,9 @@ class Game {
         const isAbove = player.body.y + player.body.height * 0.5 < enemy.body.y;
 
         if (isFalling && isAbove) {
-            // Player jumped on enemy - play death animation then destroy
-            enemy.setData('state', 'dying');
-            enemy.setVelocityX(0);
-            enemy.body.setEnable(false); // Disable physics during death
-            
-            // Play death animation
-            enemy.anims.play('cat-death');
-            
-            // Destroy after animation completes
-            enemy.once('animationcomplete', () => {
-                if (enemy.active) {
-                    enemy.setData('state', 'dead');
-                    enemy.destroy();
-                }
-            });
+            // Player jumped on enemy - destroy immediately (no death animation in 4x4 grid)
+            enemy.setData('state', 'dead');
+            enemy.destroy();
             
             player.setVelocityY(-400); // Higher bounce
             this.score += 50;
@@ -1808,7 +2467,9 @@ class Game {
                 // Stun the cat briefly
                 enemy.setData('state', 'idle');
                 enemy.setVelocityX(0);
-                enemy.anims.play('cat-idle');
+                if (this.currentScene && this.currentScene.anims.exists('cat-idle')) {
+                    enemy.anims.play('cat-idle');
+                }
                 enemy.setData('attackCooldown', 60); // 1 second stun
                 
                 // Return to walking after stun
@@ -1817,8 +2478,12 @@ class Game {
                         if (enemy.active && enemy.getData('state') === 'idle') {
                             const dir = enemy.getData('direction');
                             enemy.setData('state', 'walking');
-                            enemy.setVelocityX(60 * dir);
-                            enemy.anims.play(dir > 0 ? 'cat-walk-right' : 'cat-walk-left');
+                            // Velocity based on tile size: 1.25 tiles per second
+                            enemy.setVelocityX(CONFIG.TILE_SIZE * 1.25 * dir);
+                            const animKey = dir > 0 ? 'cat-walk-right' : 'cat-walk-left';
+                            if (this.currentScene && this.currentScene.anims.exists(animKey)) {
+                                enemy.anims.play(animKey);
+                            }
                         }
                     });
                 }
@@ -1915,6 +2580,13 @@ class Game {
         this.debugMode = !this.debugMode;
         console.log(`Debug Mode: ${this.debugMode ? 'ON' : 'OFF'}`);
         
+        // Toggle physics debug visualization
+        if (this.currentScene && this.currentScene.physics) {
+            this.currentScene.physics.world.drawDebug = this.debugMode;
+            this.currentScene.physics.world.debugGraphic.clear();
+        }
+        
+        // Toggle platform/hazard visibility (for debugging collision boxes)
         if (this.platforms) {
             this.platforms.children.iterate((child) => {
                 if (child) child.setVisible(this.debugMode);
@@ -1934,24 +2606,40 @@ class Game {
     }
 }
 
-// Pause button functionality
+// Pause button functionality - enhanced with scene pause/resume
 if (typeof window !== 'undefined') {
     window.addEventListener('DOMContentLoaded', () => {
         const pauseBtn = document.getElementById('pause-btn');
         if (pauseBtn) {
             pauseBtn.addEventListener('click', () => {
                 if (window.gameInstance && window.gameInstance.game) {
-                    const scene = window.gameInstance.game.scene.getScene('default');
                     const scenes = window.gameInstance.game.scene.scenes;
                     if (scenes.length > 0) {
                         const activeScene = scenes[0];
-                        if (activeScene.physics.world.isPaused) {
+                        if (activeScene.scene.isPaused()) {
+                            // Resume game
+                            activeScene.scene.resume();
                             activeScene.physics.resume();
                             pauseBtn.textContent = 'Pause';
+                            pauseBtn.classList.remove('paused');
                         } else {
+                            // Pause game
+                            activeScene.scene.pause();
                             activeScene.physics.pause();
                             pauseBtn.textContent = 'Resume';
+                            pauseBtn.classList.add('paused');
                         }
+                    }
+                }
+            });
+            
+            // Also support ESC key for pause/resume
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' || event.key === 'Pause') {
+                    // Only trigger if not typing in an input field
+                    if (event.target.tagName !== 'INPUT' && event.target.tagName !== 'TEXTAREA') {
+                        event.preventDefault();
+                        pauseBtn.click();
                     }
                 }
             });
@@ -1959,7 +2647,13 @@ if (typeof window !== 'undefined') {
     });
 }
 
-// Export Game class to window for global access
+// Export Game class to window for global access immediately
 if (typeof window !== 'undefined') {
     window.Game = Game;
+    console.log('Game class exported to window.Game');
+} else {
+    // Node.js or other environment
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = Game;
+    }
 }

@@ -3,8 +3,8 @@
 class LevelGenerator {
     constructor(apiService) {
         this.apiService = apiService;
-        this.tilesheetPath = 'Titlesheet.png';
-        this.tileSize = 64; // Assuming 64x64 tiles
+        // Tilesheet path removed - using AI-generated tiles only
+        this.tileSize = CONFIG.TILE_SIZE; // Use universal tile size from config
     }
 
     /**
@@ -45,7 +45,7 @@ For each tile type, provide:
 
 Format your response as a JSON object with this structure:
 {
-  "tileSize": 64,
+  "tileSize": ${CONFIG.TILE_SIZE},
   "tilesPerRow": 8,
   "tilesPerColumn": 8,
   "tiles": [
@@ -106,7 +106,7 @@ Format your response as a JSON object with this structure:
 
 ${JSON.stringify(tilesheetData, null, 2)}
 
-Generate a fun, challenging park-themed level map. The level should be 25 tiles wide and 15 tiles tall (1600x960 pixels at 64px per tile).
+Generate a fun, challenging park-themed level map. The level should be 25 tiles wide and 15 tiles tall (${25 * CONFIG.TILE_SIZE}x${15 * CONFIG.TILE_SIZE} pixels at ${CONFIG.TILE_SIZE}px per tile).
 
 Requirements:
 - Park theme with grass, trees, benches, paths
@@ -122,7 +122,7 @@ IMPORTANT COLLISION RULES:
 - "background" layer tiles are visual only (NO collision)
 - "decorative" layer tiles are visual only (NO collision)
 - Only ground/platform tiles should be in the "ground" layer
-- All ground tiles will get 64x64 pixel collision boxes
+- All ground tiles will get ${CONFIG.TILE_SIZE}x${CONFIG.TILE_SIZE} pixel collision boxes
 
 Return a JSON object with this structure:
 {
