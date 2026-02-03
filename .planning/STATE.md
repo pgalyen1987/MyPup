@@ -46,7 +46,12 @@
 ## Accumulated Context
 
 ### Pending Todos
-- 1 todo in `.planning/todos/pending/`
+- 2 todos in `.planning/todos/pending/`
+
+### Archived Files
+- Resolved debug files moved to `.planning/debug/archive/`
+- Completed Phase 1 files moved to `.planning/phases/archive/`
+- Empty phase directories (05, 06) removed
 
 ---
 *Last updated: 2026-02-03*
