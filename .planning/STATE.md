@@ -43,5 +43,10 @@
 - Interactive mode enabled
 - Sequential execution (parallelization disabled)
 
+## Accumulated Context
+
+### Pending Todos
+- 1 todo in `.planning/todos/pending/`
+
 ---
-*Last updated: 2026-02-02*
+*Last updated: 2026-02-03*
