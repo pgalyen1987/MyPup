@@ -2,14 +2,17 @@
  * AssetStorage: A simple IndexedDB wrapper for storing large base64 assets
  * This bypasses the 5MB localStorage limit.
  */
-class AssetStorage {
-    constructor(dbName = 'MyPupAssets', storeName = 'assets') {
+export class AssetStorage {
+    private dbName: string;
+    private storeName: string;
+    private db: IDBDatabase | null = null;
+
+    constructor(dbName: string = 'MyPupAssets', storeName: string = 'assets') {
         this.dbName = dbName;
         this.storeName = storeName;
-        this.db = null;
     }
 
-    async init() {
+    async init(): Promise<IDBDatabase> {
         if (this.db) return this.db;
 
         return new Promise((resolve, reject) => {
@@ -25,8 +28,8 @@ class AssetStorage {
                 resolve(this.db);
             };
 
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
+            request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+                const db = (event.target as IDBOpenDBRequest).result;
                 if (!db.objectStoreNames.contains(this.storeName)) {
                     db.createObjectStore(this.storeName);
                 }
@@ -34,10 +37,10 @@ class AssetStorage {
         });
     }
 
-    async setItem(key, value) {
+    async setItem(key: string, value: string): Promise<void> {
         await this.init();
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction([this.storeName], 'readwrite');
+            const transaction = this.db!.transaction([this.storeName], 'readwrite');
             const store = transaction.objectStore(this.storeName);
             const request = store.put(value, key);
 
@@ -46,10 +49,10 @@ class AssetStorage {
         });
     }
 
-    async getItem(key) {
+    async getItem(key: string): Promise<string | undefined> {
         await this.init();
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction([this.storeName], 'readonly');
+            const transaction = this.db!.transaction([this.storeName], 'readonly');
             const store = transaction.objectStore(this.storeName);
             const request = store.get(key);
 
@@ -58,10 +61,10 @@ class AssetStorage {
         });
     }
 
-    async removeItem(key) {
+    async removeItem(key: string): Promise<void> {
         await this.init();
         return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction([this.storeName], 'readwrite');
+            const transaction = this.db!.transaction([this.storeName], 'readwrite');
             const store = transaction.objectStore(this.storeName);
             const request = store.delete(key);
 
@@ -71,5 +74,6 @@ class AssetStorage {
     }
 }
 
-// Global instance
-window.assetStorage = new AssetStorage();
+// Note: AssetStorage is no longer exported to window here.
+// It is instantiated in main.ts and will be injected into classes that need it.
+// Temporary window.assetStorage assignment exists in main.ts for backward compatibility during refactoring.

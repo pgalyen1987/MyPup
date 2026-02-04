@@ -3,291 +3,222 @@
 ## Current Testing State
 
 ### Test Coverage
-- **No automated tests** currently implemented
-- **Manual testing** via browser and console
-- **API model testing** utility available (`test-models.js`)
+- **No automated tests** - Project has no test files or test framework
+- **Manual testing only** - Testing done through browser interaction
+- **No test configuration** - No Jest, Mocha, or other test runner configured
 
-## Testing Utilities
+### Test Files
+- No `*.test.ts` or `*.spec.ts` files found
+- No test directory structure
+- No test utilities or helpers
 
-### API Model Testing
-**File**: `test-models.js`
+## Testing Strategy (Recommended)
 
-**Function**: `testGeminiModels()`
-- Tests availability of Gemini API models
-- Checks text and image generation endpoints
-- Console-based testing
-- Can be run manually: `testGeminiModels()` in browser console
+### Unit Testing
 
-**Purpose**:
-- Verify API key permissions
-- Check model availability
-- Debug API endpoint issues
-- Validate API responses
+#### Testable Components
+1. **AssetStorage** - Storage operations
+   - `init()`, `setItem()`, `getItem()`, `removeItem()`
+   - IndexedDB mocking required
 
-### Manual Testing Workflow
+2. **ErrorHandler** - Error handling logic
+   - Error type classification
+   - Retry logic
+   - Error context building
 
-1. **Open browser console**
-2. **Run**: `testGeminiModels()`
-3. **Check output** for model availability
-4. **Verify** API responses
+3. **Image Processing Utilities** (in `api.ts`)
+   - `resizeImageToExactSize()`
+   - `removeLimeGreenBackground()`
+   - `validateImageContent()`
 
-## Testing Areas
+4. **Configuration** (`config.ts`)
+   - Config structure validation
+   - Default value verification
 
-### 1. API Integration
-**Current**: Manual testing via console
-**What to test**:
-- API key validation
-- Image analysis (dog photo)
-- Sprite sheet generation
-- Background generation
-- Tile generation
-- Error handling
+### Integration Testing
 
-**How to test**:
-- Upload dog image
-- Monitor console for API calls
-- Check generated assets
-- Verify error messages
+#### API Integration
+- **APIService** - External API calls
+  - Mock fetch API
+  - Test error handling
+  - Test retry logic
+  - Test image generation flow
 
-### 2. Game Logic
-**Current**: Manual gameplay testing
-**What to test**:
-- Player movement and physics
-- Collision detection
-- Enemy AI behavior
-- Collectible collection
-- Score and lives system
-- Level generation from CSV
-- Fall detection and respawn
+#### Game Logic
+- **Game class** - Core game functionality
+  - Phaser mocking required
+  - Scene lifecycle testing
+  - Physics interactions
 
-**How to test**:
-- Play game manually
-- Test edge cases (falling, collisions)
-- Verify UI updates
-- Check debug mode visualization
+### End-to-End Testing
 
-### 3. Asset Loading
-**Current**: Manual verification
-**What to test**:
-- Sprite sheet loading
-- Background frame animation
-- Tile texture creation
-- IndexedDB storage/retrieval
-- Cache invalidation
-- Fallback mechanisms
+#### User Flows
+1. **Character Upload Flow**
+   - Upload image
+   - Generate sprite sheet
+   - Start game
 
-**How to test**:
-- Clear cache and reload
-- Check AssetStorage in DevTools
-- Verify asset persistence
-- Test with slow network (throttling)
+2. **Background Generation Flow**
+   - Location detection
+   - Weather fetching
+   - Background generation
+   - Game start with background
 
-### 4. UI/UX
-**Current**: Manual interaction
-**What to test**:
-- Image upload
-- Sprite generation flow
-- Button states (enabled/disabled)
-- Loading indicators
-- Error messages
-- Game start flow
+3. **Gameplay Flow**
+   - Player movement
+   - Collision detection
+   - Collectible collection
+   - Enemy interaction
 
-**How to test**:
-- Interact with UI elements
-- Test error scenarios
-- Verify button states
-- Check loading states
+## Testing Challenges
 
-### 5. Cross-Browser
-**Current**: Not systematically tested
-**What to test**:
-- Chrome, Firefox, Safari, Edge
-- IndexedDB support
-- Canvas API support
-- Fetch API support
+### External Dependencies
+- **Phaser.js** - Complex game framework, requires mocking
+- **Gemini API** - External service, requires API key and mocking
+- **IndexedDB** - Browser API, requires polyfill/mocking
+- **Canvas API** - Image processing, requires canvas mocking
 
-## Testing Gaps
+### Async Operations
+- Multiple async operations (API calls, asset loading)
+- Timing-dependent operations
+- Race conditions possible
 
-### Missing Test Types
+### Browser APIs
+- FileReader API
+- Fetch API
+- IndexedDB
+- Canvas API
+- localStorage
 
-1. **Unit Tests**
-   - No test framework (Jest, Mocha, etc.)
-   - No test files
-   - No test runner configuration
+## Recommended Testing Tools
 
-2. **Integration Tests**
-   - No automated API testing
-   - No game loop testing
-   - No asset pipeline testing
+### Test Framework
+- **Jest** - Popular, good TypeScript support
+- **Vitest** - Fast, Vite-based, good ES modules support
+- **Mocha + Chai** - Flexible, widely used
 
-3. **E2E Tests**
-   - No end-to-end testing framework
-   - No automated gameplay testing
+### Mocking Libraries
+- **jsdom** - DOM/Canvas mocking
+- **fake-indexeddb** - IndexedDB mocking
+- **msw (Mock Service Worker)** - API mocking
+- **Phaser mock** - Custom Phaser mocking (may need to create)
 
-4. **Performance Tests**
-   - No frame rate monitoring
-   - No memory leak detection
-   - No asset loading performance tests
+### Test Utilities
+- **@testing-library/dom** - DOM testing utilities
+- **canvas-prebuilt** - Canvas polyfill for Node.js
 
-5. **Accessibility Tests**
-   - No a11y testing
-   - No keyboard navigation tests
-   - No screen reader compatibility
+## Test Structure (Proposed)
 
-## Recommended Testing Strategy
+```
+src/
+├── __tests__/           # Test files
+│   ├── api.test.ts
+│   ├── AssetStorage.test.ts
+│   ├── error-handler.test.ts
+│   ├── config.test.ts
+│   └── game.test.ts
+├── __mocks__/           # Mock implementations
+│   ├── phaser.ts
+│   ├── indexeddb.ts
+│   └── fetch.ts
+└── utils/               # Test utilities
+    ├── test-helpers.ts
+    └── mock-factories.ts
+```
 
-### Phase 1: Manual Testing Checklist
-- [ ] API key validation
-- [ ] Image upload and sprite generation
-- [ ] Game start and gameplay
-- [ ] Collision detection
-- [ ] Enemy behavior
+## Manual Testing Checklist
+
+### Character Customization
+- [ ] Upload dog photo
+- [ ] Sprite sheet generation succeeds
+- [ ] Sprite sheet displays correctly
+- [ ] Animations work (walk, jump, idle)
+
+### Background Generation
+- [ ] Location detected correctly
+- [ ] Weather data fetched
+- [ ] Background frames generated (8 frames)
+- [ ] Background animates at 2 fps
+- [ ] Background displays correctly
+
+### Gameplay
+- [ ] Player spawns correctly
+- [ ] Player movement (left/right)
+- [ ] Player jumping
+- [ ] Collision with floor
+- [ ] Enemy spawning and movement
 - [ ] Collectible collection
-- [ ] Score and lives
-- [ ] Pause/resume
-- [ ] Debug mode toggle
-- [ ] Asset caching
+- [ ] Score updates
+- [ ] Lives system
 
-### Phase 2: Automated Unit Tests
-**Framework**: Jest or Vitest
-**Test Files**:
-- `__tests__/api.test.js` - API service tests
-- `__tests__/game.test.js` - Game logic tests
-- `__tests__/character.test.js` - Character manager tests
-- `__tests__/assetStorage.test.js` - Storage tests
+### Error Handling
+- [ ] Invalid API key handling
+- [ ] Network error handling
+- [ ] Image generation failure
+- [ ] Asset loading failure
 
-**Mocking**:
-- Mock fetch API calls
-- Mock IndexedDB
-- Mock Phaser (or use headless mode)
+### Performance
+- [ ] Large sprite sheet loading
+- [ ] Background frame loading
+- [ ] Memory usage (no leaks)
+- [ ] Frame rate (60 fps target)
 
-### Phase 3: Integration Tests
-**Framework**: Playwright or Cypress
-**Test Scenarios**:
-- Full game flow (upload → generate → play)
-- Asset generation pipeline
-- Error recovery
-- Cache behavior
+## Testing Best Practices (Future)
 
-### Phase 4: Performance Tests
-**Tools**: Chrome DevTools Performance tab
-**Metrics**:
-- Frame rate (target: 60 FPS)
-- Memory usage
-- Asset load times
-- API response times
+### Unit Tests
+- Test one thing at a time
+- Mock external dependencies
+- Test edge cases
+- Test error conditions
 
-## Test Data
+### Integration Tests
+- Test component interactions
+- Use real APIs in test environment
+- Test data flow
+- Test error propagation
 
-### Test Images
-- Sample dog images for sprite generation
-- Various image formats (JPEG, PNG)
-- Different image sizes
+### E2E Tests
+- Test complete user flows
+- Use real browser (Playwright, Cypress)
+- Test across browsers
+- Test on different screen sizes
 
-### Test Levels
-- Simple level (minimal tiles)
-- Complex level (many enemies/collectibles)
-- Edge cases (no platforms, all water, etc.)
+### Test Data
+- Use fixtures for test data
+- Mock API responses
+- Use deterministic data
+- Clean up after tests
 
-### Test Scenarios
-- Happy path: Upload → Generate → Play
-- Error path: Invalid API key
-- Error path: Network failure
-- Error path: Invalid image format
-- Edge case: Very large image
-- Edge case: Empty level CSV
+## Continuous Integration (Future)
 
-## Debugging Tools
+### CI Pipeline
+- Run tests on PR
+- Run tests on merge
+- Check code coverage
+- Lint code
+- Build verification
 
-### Browser DevTools
-- **Console**: Logging and error messages
-- **Network**: API call monitoring
-- **Application**: IndexedDB inspection
-- **Performance**: Frame rate and memory
-- **Sources**: Breakpoint debugging
+### Coverage Goals
+- Unit tests: 80%+ coverage
+- Integration tests: Critical paths
+- E2E tests: Main user flows
 
-### Phaser Debug
-- **Physics Debug**: Toggle with 'D' key
-- **Visual collision boxes**
-- **Scene inspector** (if available)
+## Current Testing Approach
 
-### Custom Debug Features
-- Debug mode flag (URL parameter or localStorage)
-- Console logging with context
-- Error messages in UI
+### Development Testing
+- Manual browser testing
+- Console logging for debugging
+- Error handler logging
+- Visual inspection
 
-## Test Environment Setup
+### Debugging Tools
+- Browser DevTools
+- Console logging
+- Error handler diagnostics
+- Phaser debug mode
 
-### Local Development
-- HTTP server (Python, Node.js, or VS Code Live Server)
-- Browser with DevTools
-- API key for Gemini API
-
-### No Test Environment Required
-- Pure client-side application
-- No build step needed
-- No test database needed
-
-## Continuous Integration
-
-### Current State
-- **No CI/CD pipeline**
-- **No automated testing**
-- **No deployment automation**
-
-### Recommended CI Setup
-- **GitHub Actions** (if using GitHub)
-- **Test on push/PR**
-- **Deploy to GitHub Pages on merge**
-
-## Test Documentation
-
-### Test Cases
-- Not documented
-- Should document:
-  - Test scenarios
-  - Expected results
-  - Edge cases
-  - Known issues
-
-### Test Results
-- Not tracked
-- Should track:
-  - Test execution history
-  - Failure rates
-  - Performance metrics
-
-## Recommendations
-
-### Immediate Actions
-1. **Create manual testing checklist**
-2. **Document known issues**
-3. **Add more console logging for debugging**
-4. **Test in multiple browsers**
-
-### Short-term
-1. **Set up Jest or Vitest**
-2. **Write unit tests for API service**
-3. **Write unit tests for game logic**
-4. **Add test coverage reporting**
-
-### Long-term
-1. **E2E testing with Playwright**
-2. **Performance monitoring**
-3. **Automated regression testing**
-4. **CI/CD pipeline**
-
-## Testing Best Practices
-
-### What's Working
-✅ Manual testing workflow
-✅ Console-based API testing
-✅ Debug mode for visualization
-✅ Error logging
-
-### What's Missing
-❌ Automated test suite
-❌ Test coverage metrics
-❌ Continuous testing
-❌ Performance benchmarks
-❌ Accessibility testing
+### Known Issues
+- No automated regression testing
+- Manual testing time-consuming
+- Difficult to test edge cases
+- No performance benchmarking

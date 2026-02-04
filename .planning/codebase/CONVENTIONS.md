@@ -1,295 +1,276 @@
 # Code Conventions
 
-## Overview
-MyPup follows JavaScript ES6+ conventions with class-based architecture. The codebase prioritizes readability and maintainability.
+## TypeScript Style
 
-## Naming Conventions
+### Type Safety
+- **Strict mode**: Disabled (`strict: false` in tsconfig)
+- **Type checking**: Enabled for interfaces and classes
+- **Type-only imports**: Used for dependencies (`import type { APIService }`)
+- **Any types**: Used sparingly (e.g., Phaser types: `any`)
 
-### Files
-- **JavaScript**: `camelCase.js` (e.g., `game.js`, `character.js`)
-- **HTML/CSS**: `kebab-case` (e.g., `index.html`, `styles.css`)
-- **Assets**: `PascalCase.png` or `snake_case.png` (e.g., `MyPupLogo.png`, `background_frame_1.png`)
+### Naming Conventions
 
-### Classes
-- **PascalCase**: `Game`, `APIService`, `CharacterManager`, `AssetStorage`, `LevelGenerator`
+#### Classes
+- **PascalCase**: `APIService`, `CharacterManager`, `AssetStorage`, `Game`
+- **Descriptive**: Clear purpose from name
 
-### Variables
-- **camelCase**: `spriteSheetUrl`, `currentScene`, `uploadedImage`
-- **Constants**: `UPPER_SNAKE_CASE` in CONFIG object (e.g., `GAME_WIDTH`, `TILE_SIZE`)
-- **Private-like**: No true private members, but underscore prefix convention not consistently used
+#### Interfaces
+- **PascalCase**: `AnimationConfig`, `PhysicsConfig`, `ErrorContext`
+- **Suffix**: Often end with `Config` or `Context`
 
-### Functions/Methods
-- **camelCase**: `handleImageUpload()`, `generateSpriteSheet()`, `createLevel1()`
-- **Verb-noun pattern**: `createLevel()`, `updateBackground()`, `collectItem()`
-- **Async functions**: Explicitly marked with `async` keyword
+#### Enums
+- **PascalCase**: `ErrorType`
+- **Values**: `UPPER_SNAKE_CASE` (e.g., `API_ERROR`, `NETWORK_ERROR`)
 
-### CSS Classes
-- **kebab-case**: `.game-screen`, `.action-button`, `.debug-indicator`
+#### Variables & Functions
+- **camelCase**: `spriteSheetUrl`, `checkReadyState()`, `generateSpriteSheet()`
+- **Private members**: Prefix with `private` keyword (TypeScript)
 
-### IDs
-- **kebab-case**: `#game-container`, `#start-game-btn`, `#generation-status`
+#### Constants
+- **UPPER_SNAKE_CASE**: `CONFIG`, `GEMINI_API_KEY`, `MAX_RETRY_ATTEMPTS`
+- **Module-level**: Exported from `config.ts`
 
-## Code Style
+#### Files
+- **kebab-case**: `error-handler.ts`, `AssetStorage.ts`
+- **One class per file**: Generally followed
 
-### Indentation
-- **4 spaces** (not tabs)
-- Consistent across all files
+## Code Organization
 
-### Semicolons
-- **Always used** - Explicit semicolons at end of statements
+### Module Structure
+```typescript
+// 1. Imports
+import { CONFIG } from './config.js';
 
-### Quotes
-- **Single quotes** preferred for strings
-- Double quotes used in JSON and HTML attributes
+// 2. Type definitions (if any)
+interface MyInterface { ... }
 
-### Line Length
-- No strict limit, but generally kept under 100-120 characters
-- Long lines broken with proper indentation
+// 3. Class/function definitions
+export class MyClass { ... }
 
-### Spacing
-- **Functions**: Space after `function` keyword
-- **Objects**: Space after colons in object literals
-- **Arrays**: No space inside brackets `[item]`
-- **Operators**: Spaces around operators (`a + b`, not `a+b`)
+// 4. Exports (if any additional)
+```
 
-## Class Structure
-
-### Constructor Pattern
-```javascript
-class Game {
-    constructor(spriteSheetUrl, initialLevelImage = null) {
-        this.spriteSheetUrl = spriteSheetUrl;
-        // Method binding
-        this.preload = this.preload.bind(this);
-        // ...
-    }
+### Class Structure
+```typescript
+export class MyClass {
+    // 1. Properties (private first, then public)
+    private privateProp: string;
+    public publicProp: number;
+    
+    // 2. Constructor
+    constructor(...) { ... }
+    
+    // 3. Methods (public first, then private)
+    public publicMethod() { ... }
+    private privateMethod() { ... }
 }
 ```
 
-### Method Binding
-- Methods bound in constructor when used as callbacks
-- Ensures `this` context is preserved
-- Pattern: `this.methodName = this.methodName.bind(this);`
+### Method Ordering
+- Constructor first
+- Public methods before private
+- Related methods grouped together
+- Lifecycle methods in order (preload, create, update)
 
-### Property Initialization
-- Properties initialized in constructor
-- Default values via function parameters
-- No TypeScript, so no type annotations
-
-## Function Patterns
-
-### Async/Await
-- **Preferred** over Promise chains
-- Error handling with try-catch blocks
-- Example:
-```javascript
-async generateSpriteSheet(dogDescription, imageBase64) {
-    try {
-        const spritePrompt = await this.analyzeDogImageAndCreatePrompt(imageBase64);
-        // ...
-    } catch (error) {
-        console.error('Error:', error);
-        throw error;
-    }
-}
-```
-
-### Error Handling
-- Try-catch blocks around async operations
-- Error messages logged to console
-- User-facing error messages in UI
-- Errors re-thrown when appropriate
-
-### Callback Patterns
-- Phaser scene callbacks use wrapper functions
-- `self` variable captures `this` for nested functions
-- Example:
-```javascript
-const self = this;
-scene: {
-    preload: function() { self.preload(this); },
-    create: function() { self.create(this); }
-}
-```
-
-## Comments
+## Comments & Documentation
 
 ### File Headers
-- Brief description at top of file
-- Example: `// Main game logic using Phaser.js`
+- JSDoc-style comments for major files
+- Purpose and role description
 
-### Inline Comments
+### Function Comments
+- JSDoc for public methods (when needed)
+- Inline comments for complex logic
+- TODO comments avoided (per user rules)
+
+### Code Comments
 - Explain "why" not "what"
-- Used for complex logic or workarounds
-- Debug comments left in code (e.g., `// Debug: Check texture availability`)
+- Complex algorithms documented
+- API integration points explained
 
-### TODO Comments
-- Not found in current codebase (all TODOs implemented)
-- Would use `// TODO: description` format if needed
+## Error Handling
 
-### Documentation Comments
-- JSDoc-style comments for some methods
-- Not consistently applied across all methods
-- Example:
-```javascript
-/**
- * Generate sprite sheet using Gemini 3 (Imagen 3 via Gemini API)
- */
-async generateSpriteSheet(dogDescription, imageBase64) {
-    // ...
+### Error Types
+- Custom error classes: `AppError`
+- Error context objects: `ErrorContext`
+- User-friendly messages: `userMessage` property
+
+### Error Handling Pattern
+```typescript
+try {
+    // operation
+} catch (error) {
+    errorHandler.handleError(
+        ErrorType.API_ERROR,
+        'Operation failed',
+        { operation: 'methodName', module: 'ClassName' },
+        error
+    );
 }
 ```
 
-## Constants and Configuration
+## Async/Await Patterns
 
-### Global Config Object
-- All constants in `CONFIG` object (config.js)
-- UPPER_SNAKE_CASE for property names
-- Grouped by category (API, Game, Sprite)
+### Async Functions
+- All API calls use `async/await`
+- No promise chains (prefer async/await)
+- Error handling with try/catch
 
-### Magic Numbers
-- Avoided - use CONFIG constants
-- Example: `CONFIG.TILE_SIZE` instead of `64`
-- Universal tile size: `64` pixels (defined once in CONFIG)
+### Promise Patterns
+```typescript
+// Preferred
+async function myFunction() {
+    try {
+        const result = await someAsyncOperation();
+        return result;
+    } catch (error) {
+        // handle error
+    }
+}
 
-### Hardcoded Values
-- Some hardcoded values remain (e.g., animation frame indices)
-- Should be moved to CONFIG for consistency
-
-## Variable Declarations
-
-### const vs let
-- **const** preferred for values that don't change
-- **let** used for variables that are reassigned
-- **var** not used (ES6+ only)
-
-### Variable Naming
-- Descriptive names (e.g., `spriteSheetUrl` not `url`)
-- Abbreviations avoided (e.g., `scene` not `sc`)
-- Boolean prefixes: `is`, `has`, `can` (e.g., `isAttacking`, `hasTraded`)
-
-## Object and Array Patterns
-
-### Object Literals
-- Short syntax when possible
-- Properties on separate lines for readability
-- Example:
-```javascript
-const config = {
-    type: Phaser.AUTO,
-    width: CONFIG.GAME_WIDTH,
-    height: CONFIG.GAME_HEIGHT
-};
+// Avoid
+function myFunction() {
+    return someAsyncOperation()
+        .then(result => { ... })
+        .catch(error => { ... });
+}
 ```
 
-### Array Methods
-- Functional style preferred (map, filter, forEach)
-- Arrow functions for short callbacks
-- Example:
-```javascript
-rows.forEach((row, rowIndex) => {
-    // ...
-});
-```
+## Phaser Integration
 
-## Phaser-Specific Patterns
+### Type Handling
+- Phaser types as `any` (no official types)
+- Custom type definitions in `phaser.d.ts`
+- Runtime checks for Phaser availability
 
 ### Scene Lifecycle
-- Methods: `preload()`, `create()`, `update()`
-- Bound to Game class instance
-- Scene passed as parameter
+- `preload()` - Asset loading
+- `create()` - Initialization
+- `update()` - Game loop
+- Methods bound to `this` in constructor
 
-### Physics Bodies
-- Arcade Physics used throughout
-- Body size and offset set explicitly
-- Immovable flag for static objects
+## Configuration Management
 
-### Sprite Creation
-- Dynamic texture creation from base64
-- Sprite sheet frame configuration
-- Animation creation from frames
+### Centralized Config
+- All config in `config.ts`
+- Nested objects by domain
+- Type-safe interfaces
+- Runtime access via `CONFIG` export
 
-## API Integration Patterns
+### Config Access Pattern
+```typescript
+// Import config
+import { CONFIG } from './config.js';
 
-### Fetch API
-- Used for all HTTP requests
-- Error handling with response.ok checks
-- JSON parsing with error handling
+// Access nested config
+CONFIG.ANIMATION.PLAYER_WALK_RIGHT_START
+CONFIG.API.GEMINI_API_URL
+```
 
-### Base64 Handling
-- MIME type detection and handling
-- Data URL format: `data:image/png;base64,{data}`
-- Extraction: `imageBase64.split(',')[1]`
+## Dependency Injection
 
-### Async Asset Loading
-- Promises for asset operations
-- Retry mechanisms for failed loads
-- Cache checks before API calls
+### Constructor Injection
+- Dependencies passed via constructor
+- No global singletons (except CONFIG)
+- Type-only imports for dependencies
+
+### Example
+```typescript
+class MyClass {
+    constructor(
+        private apiService: APIService,
+        private assetStorage: AssetStorage
+    ) {}
+}
+```
 
 ## Storage Patterns
 
 ### localStorage
-- Simple key-value storage
-- JSON.stringify/parse for objects
-- Used for: API keys, flags, small metadata
+- Small data: API keys, metadata
+- Synchronous access
+- JSON serialization
 
-### IndexedDB (AssetStorage)
-- Async operations only
-- Error handling for storage failures
-- Fallback considerations (though not fully implemented)
+### IndexedDB (via AssetStorage)
+- Large data: Base64 assets
+- Async access
+- String storage (base64)
 
-## Debugging Patterns
+### Cache Keys
+- Consistent naming: `location_background_frames`, `player_sprite_sheet`
+- Versioned metadata: `location_background_meta`
 
-### Console Logging
-- Strategic console.log statements
-- Debug mode flag controls verbosity
-- Error logging with context
+## API Integration
 
-### Debug Mode
-- Toggle with 'D' key in game
-- URL parameter: `?debug=true`
-- localStorage flag: `debug_mode`
-- Different API endpoints in debug mode
+### Error Handling
+- Try/catch around all API calls
+- Structured error parsing
+- Retry logic with exponential backoff
+- User-friendly error messages
 
-### Physics Debug
-- Phaser physics debug visualization
-- Toggle with debug mode
-- Shows collision boxes
+### Request Patterns
+```typescript
+const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+});
 
-## Code Organization
+if (!response.ok) {
+    // handle error
+}
 
-### File Structure
-- One class per file (generally)
-- Related utilities grouped together
-- Global functions at file level
+const data = await response.json();
+```
 
-### Method Ordering
-- Constructor first
-- Lifecycle methods (preload, create, update)
-- Public methods
-- Private/helper methods last
+## Code Quality Rules (from user rules)
 
-### Import Dependencies
-- No module system (script tags)
-- Load order matters
-- Dependencies loaded first
+### DRY Principle
+- No code duplication
+- Reusable components
+- Shared utilities
 
-## Best Practices Followed
+### No TODOs
+- Complete implementations
+- No "to do" statements
+- Working code only
 
-✅ **Consistent naming conventions**
-✅ **Async/await for asynchronous code**
-✅ **Error handling with try-catch**
-✅ **Constants in CONFIG object**
-✅ **Descriptive variable names**
-✅ **Method binding for callbacks**
-✅ **Comments for complex logic**
+### Clean Code
+- Simple and readable
+- Avoid unnecessary complexity
+- PEP 8-like standards (adapted for TypeScript)
 
-## Areas for Improvement
+### Consistency
+- Single architecture
+- Consistent patterns
+- No discrepancies
 
-⚠️ **Type annotations** - Consider TypeScript
-⚠️ **JSDoc comments** - More comprehensive documentation
-⚠️ **Private members** - Consider using #private syntax
-⚠️ **Magic numbers** - Some hardcoded values remain
-⚠️ **Error types** - Custom error classes
-⚠️ **Testing** - No unit tests currently
-⚠️ **Linting** - No ESLint configuration visible
+## Formatting
+
+### Indentation
+- 4 spaces (TypeScript default)
+- Consistent throughout
+
+### Line Length
+- No strict limit
+- Readability prioritized
+
+### Semicolons
+- Used consistently
+- TypeScript/JavaScript standard
+
+### Quotes
+- Single quotes preferred (when consistent)
+- Double quotes for JSON/HTML attributes
+
+## Testing
+
+### Current State
+- No test files found
+- No test framework configured
+- Manual testing only
+
+### Future Considerations
+- Unit tests for utilities
+- Integration tests for API
+- E2E tests for game flow

@@ -5,273 +5,202 @@
 ```
 MyPup/
 ├── .planning/
-│   └── codebase/          # Codebase documentation (this folder)
-│
-├── assets/
-│   ├── background/        # Pre-generated background frames (4 frames)
-│   │   ├── background_frame_1.png
-│   │   ├── background_frame_2.png
-│   │   ├── background_frame_3.png
-│   │   └── background_frame_4.png
-│   ├── Cat.png           # Cat enemy sprite reference
+│   └── codebase/          # Codebase documentation (this directory)
+├── assets/                # Static assets
+│   ├── Cat.png           # Cat enemy sprite (fallback)
 │   └── MyPupLogo.png     # Game logo
-│
-├── index.html            # Main HTML entry point
-├── styles.css            # Global styles
-│
-├── config.js             # Configuration and API keys
-├── AssetStorage.js       # IndexedDB wrapper for asset caching
-│
-├── api.js                # Gemini API integration (APIService class)
-├── character.js          # Character customization (CharacterManager class)
-├── game.js               # Main game logic (Game class, Phaser)
-├── levels.js             # Level data (CSV definitions)
-├── level-generator.js    # Level generation utilities (LevelGenerator class)
-├── test-models.js        # API model testing utilities
-│
+├── dist/                  # Compiled JavaScript (TypeScript output)
+│   ├── api.js
+│   ├── AssetStorage.js
+│   ├── character.js
+│   ├── config.js
+│   ├── error-handler.js
+│   ├── game.js
+│   ├── main.js
+│   └── phaser.d.ts       # Phaser type definitions
+├── node_modules/          # npm dependencies
+├── src/                   # TypeScript source files
+│   ├── api.ts            # API service (Gemini, location, weather)
+│   ├── AssetStorage.ts   # IndexedDB wrapper for large assets
+│   ├── character.ts      # Character customization manager
+│   ├── config.ts         # Centralized configuration
+│   ├── error-handler.ts  # Error handling system
+│   ├── game.ts           # Main game logic (Phaser)
+│   ├── main.ts           # Application entry point
+│   └── phaser.d.ts       # Phaser type definitions
+├── index.html            # Main HTML file
+├── styles.css            # Application styles
+├── package.json          # npm configuration
+├── package-lock.json     # Dependency lock file
+├── tsconfig.json         # TypeScript configuration
 ├── README.md             # Project documentation
-├── SETUP.md              # Setup instructions
+├── BUILD.md              # Build instructions
+├── DEVELOPMENT.md        # Development guide
 └── GITHUB_PAGES_SETUP.md # GitHub Pages deployment guide
 ```
 
-## File Responsibilities
+## Source Files (`src/`)
 
-### Entry Point
-- **`index.html`**
-  - HTML structure
-  - Script loading order
-  - UI elements (menu, game screen)
-  - Pre-generation asset loading logic
-  - Global window functions for asset management
+### Core Modules
 
-### Configuration
-- **`config.js`**
-  - API endpoints (production vs debug mode)
-  - Game constants (dimensions, physics, sprite sizes)
-  - Debug mode detection and management
-  - API key loading from localStorage
-  - Global CONFIG object
+#### `main.ts` (Entry Point)
+- **Size**: ~314 lines
+- **Purpose**: Bootstrap application, wire dependencies
+- **Exports**: None (side effects only)
+- **Imports**: All other modules
 
-### Storage Layer
-- **`AssetStorage.js`**
-  - IndexedDB wrapper class
-  - Async storage operations
-  - Database initialization
-  - Fallback to localStorage (not implemented, but structure supports it)
+#### `config.ts` (Configuration)
+- **Size**: ~544 lines
+- **Purpose**: Centralized configuration
+- **Exports**: `CONFIG` object, configuration interfaces
+- **Key Sections**:
+  - Animation config
+  - Physics config
+  - Timing config
+  - Visual config
+  - API config
 
-### API Layer
-- **`api.js`**
-  - `APIService` class
-  - Gemini API integration
-  - Image analysis and prompt generation
-  - Sprite sheet generation
-  - Background generation (location-based)
-  - Tile generation (platform, water, treat, bone)
-  - Enemy sprite generation
-  - Error handling and parsing
-  - Base64 image manipulation
+#### `api.ts` (API Service)
+- **Size**: ~1529 lines
+- **Purpose**: External API integration
+- **Exports**: `APIService` class
+- **Key Methods**:
+  - `analyzeDogImageAndCreatePrompt()` - Dog image analysis
+  - `generateSpriteSheet()` - Sprite sheet generation
+  - `generateLocationBackground()` - Background generation
+  - `generateSingleFrame()` - Individual frame generation
+  - Image processing utilities
 
-### Character Management
-- **`character.js`**
-  - `CharacterManager` class
-  - Image upload handling
-  - Automatic sprite sheet generation trigger
-  - Ready state checking (sprite sheet + background)
-  - Game start initialization
-  - UI state management (buttons, loading indicators)
-  - Character persistence (save/load)
+#### `game.ts` (Game Engine)
+- **Size**: ~2695 lines
+- **Purpose**: Core game logic
+- **Exports**: `Game` class
+- **Key Methods**:
+  - `preload()` - Asset loading
+  - `create()` - Scene initialization
+  - `update()` - Game loop
+  - `updateBackground()` - Background rendering
+  - `createAnimations()` - Animation setup
+  - `createLevel1()` - Level generation
 
-### Game Logic
-- **`game.js`**
-  - `Game` class (main game controller)
-  - Phaser game configuration
-  - Scene lifecycle (preload, create, update)
-  - Player physics and controls
-  - Enemy AI and behavior
-  - Collision detection
-  - Collectible management
-  - Level generation from CSV
-  - Background animation
-  - UI updates (score, lives)
-  - Pause/resume functionality
-  - Debug mode toggle
+#### `character.ts` (Character Manager)
+- **Size**: ~300+ lines
+- **Purpose**: Character customization UI
+- **Exports**: `CharacterManager` class
+- **Key Methods**:
+  - `checkReadyState()` - Asset readiness polling
+  - `startGame()` - Game initialization
+  - File upload handling
 
-### Level Data
-- **`levels.js`**
-  - Level definitions (CSV format)
-  - Level metadata (theme, name)
-  - CSV parsing utilities
-  - Tile type definitions (P=platform, W=water, C=cat, T=treat, B=bone)
+#### `AssetStorage.ts` (Storage)
+- **Size**: ~80 lines
+- **Purpose**: IndexedDB wrapper
+- **Exports**: `AssetStorage` class
+- **Key Methods**:
+  - `init()` - Database initialization
+  - `setItem()` / `getItem()` / `removeItem()` - Storage operations
 
-### Level Generation
-- **`level-generator.js`**
-  - `LevelGenerator` class
-  - Tilesheet analysis (via Gemini)
-  - Level generation utilities
-  - Tile identification and mapping
+#### `error-handler.ts` (Error Handling)
+- **Size**: ~280 lines
+- **Purpose**: Centralized error handling
+- **Exports**: `ErrorHandler` class, `ErrorType` enum, `AppError` class
+- **Key Features**:
+  - Custom error types
+  - Retry logic
+  - Error logging
 
-### Testing
-- **`test-models.js`**
-  - API model availability testing
-  - Console testing functions
-  - Model endpoint verification
+#### `phaser.d.ts` (Type Definitions)
+- **Purpose**: Phaser.js type definitions
+- **Content**: TypeScript declarations for Phaser API
 
-### Styling
-- **`styles.css`**
-  - Global styles
-  - UI component styles
-  - Game screen layout
-  - Debug indicator styles
-  - Responsive considerations
+## Compiled Output (`dist/`)
 
-## Module Dependencies
+- TypeScript compiles `src/*.ts` → `dist/*.js`
+- ES2020 modules (no bundling)
+- Comments removed
+- Source maps disabled
+- Type definitions preserved
 
-### Dependency Graph
+## Module Organization
 
-```
-index.html
-    ├─▶ Phaser.js (CDN)
-    ├─▶ AssetStorage.js
-    ├─▶ config.js
-    ├─▶ api.js
-    ├─▶ test-models.js
-    ├─▶ levels.js
-    ├─▶ level-generator.js
-    ├─▶ character.js
-    │   └─▶ api.js
-    └─▶ game.js
-        ├─▶ config.js
-        ├─▶ levels.js
-        └─▶ api.js (indirect, via window.api)
-```
+### By Responsibility
+- **Configuration**: `config.ts`
+- **External Services**: `api.ts`
+- **Storage**: `AssetStorage.ts`
+- **Game Logic**: `game.ts`
+- **UI/UX**: `character.ts`
+- **Error Handling**: `error-handler.ts`
+- **Bootstrap**: `main.ts`
 
-### Global Objects
+### By Layer
+- **Presentation**: `index.html`, `styles.css`
+- **Application**: `main.ts`, `character.ts`
+- **Domain**: `game.ts`
+- **Infrastructure**: `api.ts`, `AssetStorage.ts`, `error-handler.ts`
+- **Configuration**: `config.ts`
 
-**Window-level exports:**
-- `window.Game` - Game class constructor
-- `window.api` - APIService instance
-- `window.assetStorage` - AssetStorage instance
-- `window.gameInstance` - Current game instance
-- `window.LEVELS` - Level data array
-- `window.locationBackground` - Cached background spritesheet
-- `window.locationBackgroundFrames` - Background frame metadata
-- `window.catEnemySpriteSheet` - Cached cat sprite sheet
+## File Naming Conventions
 
-**Configuration:**
-- `CONFIG` - Global configuration object (from config.js)
+- **TypeScript files**: `kebab-case.ts` (e.g., `error-handler.ts`)
+- **JavaScript output**: `kebab-case.js` (e.g., `error-handler.js`)
+- **Classes**: `PascalCase` (e.g., `APIService`, `CharacterManager`)
+- **Interfaces**: `PascalCase` (e.g., `AnimationConfig`, `PhysicsConfig`)
+- **Constants**: `UPPER_SNAKE_CASE` (e.g., `CONFIG`, `ErrorType`)
 
-## Code Organization Patterns
+## Import/Export Patterns
 
-### Class-Based Modules
-Each major component is a class:
-- `Game` - Encapsulates all game logic
-- `APIService` - Encapsulates API interactions
-- `CharacterManager` - Encapsulates character customization
-- `AssetStorage` - Encapsulates storage operations
-- `LevelGenerator` - Encapsulates level generation
+### Default Exports
+- None (all named exports)
 
-### Global Functions
-Utility functions attached to window:
-- `generateLocationBackground()` - Background pre-generation
-- `generateLevelTilesPreload()` - Tile pre-generation
-- `generateEnemySpritesPreload()` - Enemy pre-generation
-- `preGenerateGameAssets()` - Unified pre-generation
+### Named Exports
+- Classes: `export class APIService`
+- Interfaces: `export interface AnimationConfig`
+- Enums: `export enum ErrorType`
+- Constants: `export const CONFIG`
 
-### Event-Driven Architecture
-- DOM event listeners in `character.js`
-- Phaser input system in `game.js`
-- Keyboard shortcuts (D for debug, ESC for pause)
+### Import Patterns
+- Type-only imports: `import type { APIService } from './api.js'`
+- Value imports: `import { CONFIG } from './config.js'`
+- Side-effect imports: `import './config.js'`
 
 ## Asset Organization
 
+### Static Assets (`assets/`)
+- Images: PNG format
+- Logo: `MyPupLogo.png`
+- Fallback sprites: `Cat.png`
+
 ### Generated Assets (Runtime)
-- Stored in IndexedDB via AssetStorage
-- Keys:
-  - `custom_sprite_sheet` - User's dog sprite sheet
-  - `original_dog_image` - Uploaded dog image
-  - `location_background` - Generated background spritesheet
-  - `location_background_frames` - Background frame metadata
-  - `level_tiles_v1` - Generated level tiles (JSON)
-  - `enemy_cat_spritesheet` - Cat enemy sprite sheet
+- Sprite sheets: Base64, stored in IndexedDB
+- Background frames: Base64 array, stored in IndexedDB
+- Metadata: JSON, stored in localStorage
 
-### Static Assets
-- Stored in `assets/` directory
-- Served directly via HTTP
-- Background frames (pre-generated examples)
-- Logo and reference images
+## Build Output Structure
 
-## Data Structures
-
-### Level Data Format
-```javascript
-{
-  name: "Level 1",
-  theme: "Sunny Meadow",
-  csv: "P,P,P,..." // CSV string with tile codes
-}
+```
+dist/
+├── *.js              # Compiled TypeScript
+└── phaser.d.ts       # Type definitions (copied)
 ```
 
-### Tile Codes
-- `P` - Platform (solid, collidable)
-- `W` - Water (hazard, collidable)
-- `C` - Cat enemy spawn
-- `T` - Treat (collectible)
-- `B` - Bone (collectible)
-- `.` - Empty space
+## Configuration Files
 
-### Sprite Sheet Format
-- 4×4 grid (16 frames total)
-- 64×64 pixels per frame
-- Row 0: Idle (4 frames)
-- Row 1: Walk right (4 frames)
-- Row 2: Walk left (4 frames)
-- Row 3: Jump (4 frames)
+### `tsconfig.json`
+- TypeScript compiler configuration
+- Target: ES2020
+- Module: ES2020
+- Output: `dist/`
+- Excludes: `node_modules`, `dist`, `assets`, `.planning`
 
-## Naming Conventions
+### `package.json`
+- Project metadata
+- Build scripts: `build`, `watch`, `dev`
+- Dev dependencies only
 
-### Files
-- `camelCase.js` for JavaScript files
-- `kebab-case.md` for documentation
-- `PascalCase.png` for asset files
+## Documentation Files
 
-### Classes
-- `PascalCase` - Game, APIService, CharacterManager
-
-### Variables
-- `camelCase` - spriteSheetUrl, currentScene
-- `UPPER_SNAKE_CASE` - Constants (CONFIG properties)
-
-### Functions
-- `camelCase` - handleImageUpload, generateSpriteSheet
-- `verbNoun` pattern - createLevel, updateBackground
-
-### CSS Classes
-- `kebab-case` - `game-screen`, `action-button`
-
-## Import/Export Pattern
-
-### No Module System
-- All files loaded via `<script>` tags
-- Global scope for sharing
-- Load order matters (dependencies first)
-
-### Script Loading Order (index.html)
-1. Phaser.js (CDN)
-2. AssetStorage.js
-3. config.js
-4. api.js
-5. test-models.js
-6. levels.js
-7. level-generator.js
-8. character.js
-9. game.js
-
-## Future Structure Considerations
-
-### Potential Improvements
-- Module bundler (Webpack, Vite) for better organization
-- TypeScript for type safety
-- Separate test directory
-- Build output directory
-- Environment-specific config files
-- Component-based UI framework (optional)
+- `README.md` - Project overview and setup
+- `BUILD.md` - Build instructions
+- `DEVELOPMENT.md` - Development guide
+- `GITHUB_PAGES_SETUP.md` - Deployment guide
+- `.planning/codebase/*.md` - Codebase documentation

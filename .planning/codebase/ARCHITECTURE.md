@@ -1,262 +1,209 @@
-# System Architecture
+# Architecture
 
-## Overview
-MyPup follows a client-side game architecture with AI-powered asset generation. The game uses Phaser.js for rendering and physics, with asynchronous asset loading and caching.
+## System Overview
 
-## High-Level Architecture
+MyPup is a client-side retro 16-bit platformer game built with Phaser.js. The application uses AI (Google Gemini) to generate custom sprite sheets from user-uploaded dog photos and location-based backgrounds.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Browser (Client)                     │
-├─────────────────────────────────────────────────────────┤
-│                                                           │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────┐  │
-│  │  index.html  │───▶│  character.js│───▶│  api.js  │  │
-│  │  (UI Layer)  │    │  (Character  │    │  (API    │  │
-│  │              │    │   Manager)   │    │  Service)│  │
-│  └──────────────┘    └──────────────┘    └──────────┘  │
-│         │                    │                  │        │
-│         │                    │                  │        │
-│         ▼                    ▼                  ▼        │
-│  ┌──────────────────────────────────────────────────┐  │
-│  │              game.js (Phaser Game)                 │  │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │  │
-│  │  │ Preload  │─▶│  Create  │─▶│    Update    │  │  │
-│  │  │  Scene   │  │  Scene   │  │    Loop      │  │  │
-│  │  └──────────┘  └──────────┘  └──────────────┘  │  │
-│  └──────────────────────────────────────────────────┘  │
-│         │                    │                  │        │
-│         ▼                    ▼                  ▼        │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────┐ │
-│  │ AssetStorage │    │  levels.js    │    │ config.js │ │
-│  │ (IndexedDB)  │    │  (Level Data) │    │  (Config) │ │
-│  └──────────────┘    └──────────────┘    └──────────┘ │
-└─────────────────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────────┐
-│              External APIs (Internet)                    │
-├─────────────────────────────────────────────────────────┤
-│  • Google Gemini API (AI generation)                    │
-│  • ipapi.co (Geolocation)                                │
-│  • Open-Meteo (Weather data)                             │
-└─────────────────────────────────────────────────────────┘
-```
+## Architecture Pattern
+
+**Modular ES6 Module Architecture** with dependency injection:
+- TypeScript modules with explicit imports/exports
+- Constructor injection for dependencies
+- No global state (except window exports for backward compatibility during refactoring)
 
 ## Core Components
 
-### 1. Game Initialization Flow
+### 1. Main Bootstrap (`main.ts`)
+- **Role**: Application entry point
+- **Responsibilities**:
+  - Initialize services (AssetStorage, APIService)
+  - Wire dependencies via constructor injection
+  - Start background generation immediately on page load
+  - Initialize CharacterManager with all dependencies
+- **Dependencies**: All other modules
 
-```
-User Uploads Image
-    ↓
-character.js: handleImageUpload()
-    ↓
-character.js: generateSpriteSheet() (automatic)
-    ↓
-api.js: generateSpriteSheet()
-    ├─▶ analyzeDogImageAndCreatePrompt() (Gemini 1.5/2.5 Flash)
-    └─▶ Image generation (Gemini 3 Pro Image Preview/2.5 Flash Image)
-    ↓
-AssetStorage: Store sprite sheet
-    ↓
-character.js: checkReadyState()
-    ↓
-User clicks "Start Game"
-    ↓
-game.js: new Game(spriteSheetUrl)
-    ↓
-Phaser Game Initialization
-    ├─▶ preload() - Load assets
-    ├─▶ create() - Setup scene, physics, entities
-    └─▶ update() - Game loop (60 FPS)
-```
+### 2. Configuration (`config.ts`)
+- **Role**: Centralized configuration management
+- **Structure**: 
+  - TypeScript interfaces for type safety
+  - Nested configuration objects (ANIMATION, PHYSICS, TIMING, VISUAL, API)
+  - API key management with localStorage fallback
+  - Debug mode toggle
+- **Pattern**: Singleton-like export (`CONFIG`)
 
-### 2. Asset Generation Pipeline
+### 3. API Service (`api.ts`)
+- **Role**: External API integration
+- **Responsibilities**:
+  - Gemini API communication (text/vision analysis, image generation)
+  - Location/weather API integration
+  - Image processing (resizing, background removal)
+  - Error handling and retry logic
+- **Pattern**: Service class with async methods
 
-```
-Background Generation:
-    Location Detection (ipapi.co)
-        ↓
-    Weather Data (Open-Meteo)
-        ↓
-    Prompt Generation (Gemini text model)
-        ↓
-    8-Frame Sequential Generation (Gemini image model)
-        ↓
-    AssetStorage Cache
+### 4. Game Engine (`game.ts`)
+- **Role**: Core game logic and Phaser integration
+- **Responsibilities**:
+  - Phaser scene management (preload, create, update)
+  - Player/enemy/collectible creation and management
+  - Physics and collision detection
+  - Background rendering and animation
+  - Level generation (simple floor-based)
+- **Pattern**: Class-based with Phaser lifecycle hooks
 
-Tile Generation:
-    Theme/Location Context
-        ↓
-    Individual Tile Prompts (Gemini text model)
-        ↓
-    4 Tiles Generated (platform, water, treat, bone)
-        ↓
-    AssetStorage Cache
+### 5. Character Manager (`character.ts`)
+- **Role**: Character customization UI and flow
+- **Responsibilities**:
+  - File upload handling
+  - Sprite sheet generation coordination
+  - Ready state checking
+  - Game initialization
+- **Pattern**: Manager class with UI coordination
 
-Enemy Generation:
-    Static Cat Sprite Sheet (one-time generation)
-        ↓
-    AssetStorage Cache
-```
+### 6. Asset Storage (`AssetStorage.ts`)
+- **Role**: Large asset persistence
+- **Responsibilities**:
+  - IndexedDB wrapper for large base64 assets
+  - Async storage operations
+  - Bypassing localStorage size limits
+- **Pattern**: Service class with async methods
 
-### 3. Game Loop Architecture
-
-**Phaser Scene Lifecycle:**
-1. **preload()** - Load textures, images, sounds
-2. **create()** - Initialize game objects, physics, input
-3. **update()** - Game loop (called every frame ~60 FPS)
-
-**Update Loop Responsibilities:**
-- Player movement and physics
-- Enemy AI and movement
-- Collision detection
-- Camera following
-- UI updates (score, lives)
-- Fall detection and respawn
-- Animation state management
-
-## Design Patterns
-
-### 1. Class-Based Architecture
-- `Game` class - Main game controller
-- `APIService` class - API interaction abstraction
-- `CharacterManager` class - Character customization logic
-- `AssetStorage` class - IndexedDB wrapper
-- `LevelGenerator` class - Level generation utilities
-
-### 2. Singleton Pattern (Implicit)
-- `window.gameInstance` - Single game instance
-- `window.api` - Single API service instance
-- `window.assetStorage` - Single storage instance
-
-### 3. Observer Pattern
-- Event listeners for UI interactions
-- Phaser input system (keyboard, mouse)
-- Scene lifecycle callbacks
-
-### 4. Factory Pattern
-- Dynamic sprite sheet creation from base64
-- Level generation from CSV data
-- Tile creation from cached assets
-
-### 5. Strategy Pattern
-- Debug mode vs production mode (different API endpoints)
-- Fallback storage (IndexedDB → localStorage)
+### 7. Error Handler (`error-handler.ts`)
+- **Role**: Centralized error handling
+- **Responsibilities**:
+  - Custom error types
+  - Error logging and context
+  - Retry logic with exponential backoff
+  - User-friendly error messages
+- **Pattern**: Utility module with class-based error types
 
 ## Data Flow
 
-### Asset Loading Flow
-```
-1. Check AssetStorage (IndexedDB) cache
-2. If missing/expired, generate via API
-3. Store in AssetStorage
-4. Convert base64 to Phaser texture
-5. Create sprite sheet frames
-6. Use in game
-```
+### Sprite Sheet Generation Flow
+1. User uploads dog photo → `CharacterManager`
+2. `CharacterManager` calls `APIService.analyzeDogImageAndCreatePrompt()`
+3. Gemini analyzes image → generates detailed prompt
+4. `APIService.generateSpriteSheet()` → Gemini generates sprite sheet
+5. Image processed (resize, background removal if needed)
+6. Stored in `AssetStorage` (IndexedDB)
+7. `Game` class loads from storage on game start
 
-### Level Generation Flow
-```
-1. Load CSV from levels.js
-2. Parse CSV into 2D array
-3. Calculate level dimensions (rows × 64px)
-4. Create physics bodies for each tile type
-5. Spawn enemies and collectibles from CSV markers
-6. Set world bounds and camera bounds
-7. Create ground platform at bottom
-```
+### Background Generation Flow
+1. Page load → `main.ts` checks for API key
+2. If key exists and no valid cache → `APIService.generateLocationBackground()`
+3. Get location (ipapi.co) → Get weather (Open-Meteo)
+4. Generate prompt → Generate 8 frames sequentially
+5. Store frames in `AssetStorage`
+6. `Game.updateBackground()` loads frames and creates Phaser textures
+7. Background animates at 2 fps
 
-### Player Input Flow
+### Game Initialization Flow
+1. DOM ready → `main.ts` initializes services
+2. User uploads dog photo → sprite sheet generated
+3. Background generated (async, non-blocking)
+4. `CharacterManager.checkReadyState()` polls for readiness
+5. When ready → "Start Game" button enabled
+6. User clicks → `Game` class instantiated
+7. Phaser scene loads → assets from `AssetStorage`
+8. Game starts
+
+## Design Patterns
+
+### Dependency Injection
+- Services passed via constructors
+- No global singletons (except CONFIG)
+- Example: `CharacterManager(apiService, assetStorage, Game)`
+
+### Service Layer
+- `APIService` - External API abstraction
+- `AssetStorage` - Storage abstraction
+- Clear separation of concerns
+
+### Observer Pattern (Implicit)
+- Phaser's event system for game lifecycle
+- Polling for asset readiness (`checkReadyState`)
+
+### Strategy Pattern
+- Different image processing strategies (resize, background removal)
+- Configurable animation speeds, physics parameters
+
+## Module Dependencies
+
 ```
-Keyboard Input
-    ↓
-Phaser Input System
-    ↓
-game.js: update() method
-    ↓
-Player physics body manipulation
-    ↓
-Collision detection (Arcade Physics)
-    ↓
-Game state updates
+main.ts
+├── config.ts (CONFIG)
+├── api.ts (APIService)
+├── AssetStorage.ts (AssetStorage)
+├── character.ts (CharacterManager)
+└── game.ts (Game)
+
+game.ts
+├── config.ts (CONFIG)
+├── api.ts (APIService - type only)
+├── AssetStorage.ts (AssetStorage - type only)
+└── error-handler.ts (errorHandler)
+
+api.ts
+└── config.ts (CONFIG)
+
+character.ts
+├── api.ts (APIService)
+├── AssetStorage.ts (AssetStorage)
+└── game.ts (Game - type only)
+
+error-handler.ts
+└── config.ts (CONFIG)
 ```
 
 ## State Management
 
-### Game State
-- Stored in `Game` class instance
-- Score, lives, level data
-- Player position and state
-- Enemy positions and states
-- Collectible states
+### Application State
+- **localStorage**: API keys, metadata, small config
+- **IndexedDB**: Large assets (sprite sheets, backgrounds)
+- **In-Memory**: Game state (score, lives, player position)
+- **Phaser Registry**: Scene-level state
 
-### Persistent State
-- **localStorage**: API keys, debug mode, cache flags
-- **IndexedDB**: Generated assets (sprite sheets, backgrounds, tiles)
+### No Global State
+- All state either in classes or storage
+- No global variables (except window exports for compatibility)
 
-### Scene State
-- Managed by Phaser scene lifecycle
-- Physics world state
-- Camera position and bounds
-- Sprite positions and animations
+## Error Handling Strategy
 
-## Error Handling
+### Centralized Error Handler
+- `ErrorHandler` class with custom error types
+- Structured error context
+- Retry logic with exponential backoff
+- User-friendly messages
 
-### API Errors
-- Try-catch blocks around API calls
-- Error messages displayed in UI
-- Fallback to cached assets when available
-- Graceful degradation (game continues with defaults)
-
-### Asset Loading Errors
-- Retry mechanisms for asynchronous loading
-- Texture existence checks before use
-- Fallback to programmatically generated assets
-
-### Physics Errors
-- Body existence checks before manipulation
-- Immovable flag handling for static bodies
-- Bounds validation
+### Error Types
+- API_ERROR, NETWORK_ERROR, ASSET_LOAD_ERROR
+- TEXTURE_ERROR, ANIMATION_ERROR, VALIDATION_ERROR
+- TIMEOUT_ERROR, UNKNOWN_ERROR
 
 ## Performance Considerations
 
-### Asset Caching
-- All generated assets cached in IndexedDB
-- Cache versioning for invalidation
-- 24-hour cache expiration for backgrounds
+### Asset Loading
+- Lazy loading for background frames
+- Caching in IndexedDB
+- Base64 encoding for storage
 
-### Rendering Optimization
-- Pixel-perfect rendering (no anti-aliasing)
-- Sprite sheet reuse (single texture, multiple frames)
-- Static platforms (no physics updates needed)
+### Game Loop
+- Phaser's optimized update cycle
+- Efficient collision detection (Arcade Physics)
+- Background animation at 2 fps (low overhead)
 
 ### Memory Management
-- Base64 strings stored efficiently
-- Texture cleanup on scene destroy
-- Limited concurrent API requests
+- Asset cleanup on scene destroy
+- Texture disposal
+- Timer cleanup
 
 ## Security Considerations
 
-### API Key Exposure
-- ⚠️ Keys stored in client-side JavaScript
-- Visible in source code
-- Should use backend proxy in production
+### Client-Side Only
+- API keys visible in source code
+- No backend proxy
+- Security warnings in README
 
-### CORS
-- External API calls from browser
-- No CORS issues (APIs support CORS)
-
-## Scalability
-
-### Current Limitations
-- Single level at a time
-- All assets loaded upfront
-- No level progression system
-
-### Future Considerations
-- Level progression and unlocking
-- Dynamic level loading
-- Asset streaming for large levels
-- Multiplayer support (would require backend)
+### API Key Storage
+- localStorage (visible to user)
+- No encryption
+- User responsible for key security
