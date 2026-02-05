@@ -2,30 +2,57 @@
 
 ## Critical Issues
 
-### 1. API Key Security
+### 1. Backend Integration Bug - verifyApiKey() Not Using Backend Proxy
 **Severity**: High  
-**Status**: Known issue, documented in README
+**Status**: ✅ **FIXED** (just resolved)
 
 **Problem**:
+- `verifyApiKey()` method was not updated to use backend proxy
+- When `USE_BACKEND_PROXY: true`, it still tried direct API calls
+- Since `apiKey` returns empty string in backend mode, verification always failed
+- This prevented background generation from starting
+
+**Impact**:
+- Background images never generated
+- Asset pre-generation didn't trigger
+- User saw "Backend connection issue" even though backend was working
+- Game couldn't start properly
+
+**Solution**:
+- ✅ Updated `verifyApiKey()` to use `makeApiRequest()` method
+- ✅ Now properly tests backend proxy connection
+- ✅ Works in both backend proxy and direct API modes
+
+**Root Cause**:
+- Incomplete migration when backend proxy was added
+- `verifyApiKey()` was missed during refactoring
+
+### 2. API Key Security
+**Severity**: High → **RESOLVED**  
+**Status**: ✅ Backend proxy implemented
+
+**Previous Problem**:
 - API keys stored client-side in localStorage
 - Visible in source code and browser DevTools
 - No encryption or obfuscation
 - Keys exposed in network requests (URL query parameters)
 
-**Impact**:
-- API keys can be stolen by anyone viewing source
-- Unauthorized usage of API quota
-- Potential cost implications
+**Solution Implemented**:
+- ✅ Google Cloud Functions backend proxy
+- ✅ API key stored in Google Cloud environment variables
+- ✅ Frontend no longer requires API key input
+- ✅ API key never exposed to client
+- ✅ Safe for public GitHub Pages hosting
 
-**Recommendations**:
-- Implement backend proxy for API calls
-- Move API key storage to server-side
-- Use environment variables for API keys
-- Implement API key rotation
+**Remaining Considerations**:
+- Backend CORS should be restricted to production domain (currently allows all)
+- Consider rate limiting in backend
+- Monitor API usage and costs
+- Implement API key rotation process
 
-### 2. Background Image Not Rendering
+### 3. Background Image Not Rendering
 **Severity**: High  
-**Status**: Active issue (user reported)
+**Status**: May be related to backend integration bug (see issue #1)
 
 **Problem**:
 - Background images generated successfully
@@ -353,6 +380,126 @@
 - Show user-friendly messages
 - Add help/FAQ section
 
+## Backend Integration Concerns
+
+### 1. Backend Verification Failure Handling
+**Severity**: Medium
+
+**Problem**:
+- If backend is down or misconfigured, frontend shows error but doesn't fallback
+- No retry mechanism for backend failures
+- User experience degrades without clear error messages
+
+**Impact**:
+- Application unusable if backend fails
+- No graceful degradation
+- Poor error messages
+
+**Recommendations**:
+- Add backend health check endpoint
+- Implement retry logic with exponential backoff
+- Show user-friendly error messages
+- Consider fallback to direct API mode (with warning)
+
+### 2. Backend Timeout Issues
+**Severity**: Medium
+
+**Problem**:
+- Background generation: 8 frames × ~10-15 seconds = 80-120 seconds
+- Backend timeout: 540 seconds (9 minutes) - should be enough
+- But individual frame requests might timeout
+- No progress tracking for long operations
+
+**Impact**:
+- Requests may timeout before completion
+- User sees error but doesn't know progress
+- Wasted API calls if timeout occurs mid-generation
+
+**Recommendations**:
+- Verify timeout is sufficient (currently 540s should be OK)
+- Add request timeout handling
+- Implement progress tracking
+- Consider chunking large requests
+
+### 3. Backend CORS Configuration
+**Severity**: Medium
+
+**Problem**:
+- Backend allows all origins (`*`)
+- Security risk in production
+- No domain validation
+
+**Impact**:
+- Any website can call your backend
+- Potential for abuse
+- Unauthorized usage of API quota
+
+**Recommendations**:
+- Restrict CORS to GitHub Pages domain
+- Add origin validation
+- Consider authentication for production
+- Monitor for unusual traffic patterns
+
+### 4. Backend Error Propagation
+**Severity**: Low
+
+**Problem**:
+- Backend errors may not be properly formatted
+- Frontend error handling may not recognize backend-specific errors
+- Error messages may be unclear
+
+**Impact**:
+- Difficult debugging
+- Poor user experience
+- Unclear error messages
+
+**Recommendations**:
+- Standardize error response format
+- Add error codes
+- Improve error logging in backend
+- Test error scenarios
+
+### 5. Backend Cost Monitoring
+**Severity**: Medium
+
+**Problem**:
+- No monitoring of API usage
+- No cost alerts
+- No quota management
+- Risk of unexpected costs
+
+**Impact**:
+- Unexpected billing charges
+- Quota exhaustion
+- Service disruption
+
+**Recommendations**:
+- Set up Cloud Monitoring alerts
+- Implement usage tracking
+- Add cost budgets
+- Monitor function invocations
+- Track API quota usage
+
+### 6. Backend Deployment Process
+**Severity**: Low
+
+**Problem**:
+- Manual deployment process
+- API key must be set each time
+- No CI/CD integration
+- Risk of misconfiguration
+
+**Impact**:
+- Deployment errors
+- Downtime during updates
+- Configuration mistakes
+
+**Recommendations**:
+- Automate deployment
+- Use GitHub Actions for CI/CD
+- Store API key in Google Secret Manager
+- Add deployment validation
+
 ## Security Concerns
 
 ### 1. XSS Risk
@@ -374,23 +521,23 @@
 - Escape all user data
 
 ### 2. CORS Issues
-**Severity**: Low
+**Severity**: Low → **MOSTLY RESOLVED**
 
-**Problem**:
+**Previous Problem**:
 - Multiple external APIs
 - CORS depends on API providers
 - No CORS error handling
 
-**Impact**:
-- API calls may fail
-- Poor error messages
-- User confusion
+**Solution Implemented**:
+- ✅ Backend proxy handles CORS
+- ✅ CORS configured for GitHub Pages
+- ✅ All API calls go through backend (no direct CORS issues)
 
-**Recommendations**:
-- Add CORS error detection
-- Show user-friendly CORS errors
-- Consider backend proxy
-- Test CORS scenarios
+**Remaining Considerations**:
+- Backend CORS currently allows all origins (`*`)
+- Should restrict to specific domain in production
+- Add CORS error detection in frontend
+- Test CORS scenarios with restricted origins
 
 ## Documentation Concerns
 
@@ -435,19 +582,24 @@
 ## Recommendations Summary
 
 ### Immediate Actions
-1. Fix background rendering issue (active bug)
-2. Add API key security warning prominently
-3. Implement comprehensive error handling
+1. ✅ Fix backend integration bug (verifyApiKey) - **FIXED**
+2. Fix background rendering issue (if still occurring) - **INVESTIGATE**
+3. ~~Add API key security warning prominently~~ - **RESOLVED** (backend proxy implemented)
+4. Test backend integration end-to-end
+5. Implement comprehensive error handling
 
 ### Short-term Improvements
 1. Add automated testing
 2. Improve error messages
 3. Optimize asset storage
 4. Add progress indicators
+5. Restrict backend CORS to production domain
 
 ### Long-term Improvements
-1. Backend proxy for API keys
+1. ~~Backend proxy for API keys~~ - **✅ COMPLETED**
 2. Refactor large files
 3. Enable TypeScript strict mode
 4. Improve documentation
 5. Add performance monitoring
+6. Implement rate limiting in backend
+7. Add API usage analytics

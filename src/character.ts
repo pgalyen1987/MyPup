@@ -58,6 +58,20 @@ export class CharacterManager {
             return;
         }
 
+        // Clear old sprite cache when new image is uploaded
+        console.log('New image uploaded - clearing old sprite cache...');
+        try {
+            await this.assetStorage.removeItem('custom_sprite_sheet');
+            await this.assetStorage.removeItem('original_dog_image');
+            localStorage.removeItem('custom_sprite_sheet');
+            localStorage.removeItem('original_dog_image');
+            localStorage.removeItem('has_custom_character');
+            this.currentSpriteSheet = null;
+            console.log('Old sprite cache cleared');
+        } catch (error) {
+            console.warn('Failed to clear old cache:', error);
+        }
+
         // Show preview
         const preview = document.getElementById('upload-preview');
         const reader = new FileReader();
@@ -69,7 +83,7 @@ export class CharacterManager {
             }
             this.uploadedImage = result;
             
-            // Automatically start sprite sheet generation
+            // Automatically start sprite sheet generation with new image
             await this.generateSpriteSheet();
         };
 
@@ -118,8 +132,16 @@ export class CharacterManager {
         }
 
         try {
-            // Convert image to base64 if needed
+            // Use the uploaded image (already in base64 format from FileReader)
             const imageBase64 = this.uploadedImage;
+            
+            // Verify we have the image
+            if (!imageBase64) {
+                throw new Error('No image data available');
+            }
+            
+            console.log('Generating sprite sheet with uploaded image, base64 length:', imageBase64.length);
+            console.log('Image preview (first 100 chars):', imageBase64.substring(0, 100));
             
             // Generate sprite sheet
             if (statusEl) {
@@ -156,20 +178,16 @@ export class CharacterManager {
             
             // Handle structured error objects from API
             let errorMessage = error.message || 'Unknown error occurred';
-            let showClearButton = false;
             let showRefreshButton = false;
             
             if (error.type) {
                 errorMessage = error.message || errorMessage;
                 
-                // For expired or invalid keys, suggest clearing
+                // For expired or invalid keys, show backend error
                 if (error.type === 'API_KEY_EXPIRED' || error.type === 'API_KEY_INVALID') {
-                    showClearButton = true;
-                    if (error.type === 'API_KEY_EXPIRED') {
-                        errorMessage += '\n\nThis is usually a setup issue, not expiration. Check API_SETUP_GUIDE.md for help.';
-                    } else {
-                        errorMessage += '\n\nClick "Clear API Key" above to remove the invalid key, then set a new one.';
-                    }
+                    // Backend proxy handles API keys, so this shouldn't happen
+                    // But if it does, show a generic backend error
+                    errorMessage += '\n\nPlease check your backend configuration.';
                 }
                 
                 // For model not found, suggest refreshing
@@ -181,26 +199,6 @@ export class CharacterManager {
             if (statusEl) {
                 statusEl.innerHTML = `❌ Error: ${errorMessage}`;
                 statusEl.style.color = '#ff6b6b';
-                
-                // Add a clear key button if needed
-                if (showClearButton && !document.getElementById('error-clear-key-btn')) {
-                    const clearBtn = document.createElement('button');
-                    clearBtn.id = 'error-clear-key-btn';
-                    clearBtn.className = 'clear-button';
-                    clearBtn.textContent = 'Clear Expired Key';
-                    clearBtn.style.marginTop = '10px';
-                    clearBtn.onclick = () => {
-                        if (window.clearApiKey) {
-                            window.clearApiKey();
-                            if (statusEl) {
-                                statusEl.innerHTML = 'API key cleared. Please set a new key using the "Set/Change API Key" button above.';
-                            }
-                            clearBtn.remove();
-                        }
-                    };
-                    statusEl.appendChild(document.createElement('br'));
-                    statusEl.appendChild(clearBtn);
-                }
                 
                 // Add a refresh button for model errors
                 if (showRefreshButton && !document.getElementById('error-refresh-btn')) {
@@ -349,7 +347,7 @@ export class CharacterManager {
                 const timeoutSeconds = CONFIG.TIMING.MAX_BACKGROUND_RETRY_ATTEMPTS * (CONFIG.TIMING.RETRY_DELAY_VERY_LONG / 1000);
                 console.error(`CharacterManager: Background check timed out after ${timeoutSeconds} seconds`);
                 if (statusEl) {
-                    statusEl.innerHTML = '⚠️ Background generation is taking longer than expected. Please check your API key and try refreshing.';
+                    statusEl.innerHTML = '⚠️ Background generation is taking longer than expected. Please check your backend connection and try refreshing.';
                     statusEl.style.color = '#ff9800';
                 }
             }

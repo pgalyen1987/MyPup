@@ -110,7 +110,12 @@ export class Game {
                 default: 'arcade',
                 arcade: {
                     gravity: { y: CONFIG.GRAVITY },
-                    debug: CONFIG.DEBUG_MODE // Only show collision boxes in debug mode
+                    debug: CONFIG.DEBUG_MODE, // Only show collision boxes in debug mode
+                    debugShowBody: true,
+                    debugShowStaticBody: true,
+                    debugShowVelocity: false,
+                    debugBodyColor: 0xff00ff, // Magenta/pink for collision boxes
+                    debugStaticBodyColor: 0x00ff00 // Green for static bodies (floor)
                 }
             },
             scene: {
@@ -814,109 +819,63 @@ export class Game {
                 const playerTexture = scene.textures.get('playerSprite');
                 console.log(`Game: Creating player from playerSprite texture (${playerTexture.frameTotal} frames available)`);
                 
-                // Position player so feet are well above the top of the floor collision box
-                // Floor is now at: gameHeight - tileSize = 1024 - 64 = 960 (ground surface level)
-                // Floor rectangle is positioned at y = floorY - floorHeight = 960 - 32 = 928
-                // Rectangle extends from y=928 to y=960 (ground surface)
-                // Floor top edge is at y=928
-                // With origin 0.5,1.0, sprite Y position directly represents feet position
-                const floorY = CONFIG.GAME_HEIGHT - CONFIG.TILE_SIZE; // 960 (matches createLevel1 - ground surface)
+                // Position player above the floor
+                // With origin (0.5, 1.0), sprite Y position represents feet position
+                const floorY = CONFIG.GAME_HEIGHT - CONFIG.TILE_SIZE; // 960 (ground surface)
                 const floorHeight = CONFIG.TILE_SIZE / 2; // 32px
                 const floorTopY = floorY - floorHeight; // 928 (top edge of floor collision box)
-                // Position player feet well above the floor top edge (spawn in air, will fall onto floor)
-                const playerFeetY = floorTopY - CONFIG.TILE_SIZE; // 864 (one full tile above floor top edge)
+                // Position player feet well above floor top (spawn in air, will fall onto floor)
+                const playerFeetY = floorTopY - CONFIG.TILE_SIZE; // 864 (one tile above floor top)
                 this.player = scene.physics.add.sprite(100, playerFeetY, 'playerSprite', 0);
                 this.player.setBounce(CONFIG.PHYSICS.PLAYER_BOUNCE);
                 this.player.setCollideWorldBounds(true);
                 
                 // Set origin to bottom-center (0.5, 1.0) so Y position represents feet/ground level
-                // This ensures collision box bottom aligns with feet
+                // This ensures the sprite's feet align with the bottom of the collision box
                 this.player.setOrigin(0.5, 1.0);
                 
                 // Check if sprite needs scaling (if image was wrong size)
                 const needsScaling = (scene as any).playerSpriteNeedsScaling;
-                const scaleFactor = (scene as any).playerSpriteScale || 1.0;
+                const correctionScale = (scene as any).playerSpriteScale;
                 
-                // Get frame info before scaling
-                const frame = this.player.frame;
-                const frameWidth = frame ? frame.width : CONFIG.TILE_SIZE;
-                const frameHeight = frame ? frame.height : CONFIG.TILE_SIZE;
+                // Get the default scale to make player bigger
+                const defaultScale = CONFIG.VISUAL.PLAYER_SCALE_DEFAULT || 1.5;
                 
-                console.log(`Game: Player sprite frame dimensions: ${frameWidth}x${frameHeight}`);
-                
-                if (needsScaling) {
-                    console.log(`Game: Applying scale factor ${scaleFactor} to player sprite to correct for wrong image size`);
-                    this.player.setScale(scaleFactor);
+                if (needsScaling && correctionScale) {
+                    // If sprite needs correction, multiply correction scale by default scale
+                    const finalScale = correctionScale * defaultScale;
+                    console.log(`Game: Applying correction scale ${correctionScale} × default scale ${defaultScale} = ${finalScale} to player sprite`);
+                    this.player.setScale(finalScale);
                 } else {
-                    // Player sprite frames are CONFIG.TILE_SIZE (64x64) - render at 1:1 scale
-                    this.player.setScale(1.0);
+                    // Use default scale to make player bigger
+                    console.log(`Game: Applying default scale ${defaultScale} to make player bigger`);
+                    this.player.setScale(defaultScale);
                 }
                 
-                // Explicitly set frame 0 again after scaling to ensure it's displayed correctly
-                this.player.setFrame(0);
-                
-                // Verify the frame is set correctly
-                const currentFrame = this.player.frame;
-                if (currentFrame) {
-                    console.log(`Game: Player sprite using frame ${currentFrame.index || currentFrame.name}, size: ${currentFrame.width}x${currentFrame.height}`);
-                }
-                
-                // Log sprite dimensions for debugging
-                const finalFrame = this.player.frame;
-                if (finalFrame) {
-                    console.log(`Game: Player sprite frame info: frame=${finalFrame.name || finalFrame.index}, width=${finalFrame.width}, height=${finalFrame.height}, cutX=${finalFrame.cutX}, cutY=${finalFrame.cutY}, cutWidth=${finalFrame.cutWidth}, cutHeight=${finalFrame.cutHeight}`);
-                    
-                    // Ensure frame size is correct - if not, force it
-                    if (finalFrame.width !== CONFIG.TILE_SIZE || finalFrame.height !== CONFIG.TILE_SIZE) {
-                        console.warn(`Game: Frame size mismatch! Frame is ${finalFrame.width}x${finalFrame.height}, expected ${CONFIG.TILE_SIZE}x${CONFIG.TILE_SIZE}`);
-                        console.warn(`Game: This may cause rendering issues. The sprite may appear too small or too large.`);
-                    }
-                }
-                
-                // Ensure display size is correct
-                const expectedDisplaySize = CONFIG.TILE_SIZE;
-                const actualDisplayWidth = this.player.displayWidth;
-                const actualDisplayHeight = this.player.displayHeight;
-                
-                console.log(`Game: Player display size: ${actualDisplayWidth}x${actualDisplayHeight} (expected ${expectedDisplaySize}x${expectedDisplaySize})`);
-                
-                if (Math.abs(actualDisplayWidth - expectedDisplaySize) > 1 || Math.abs(actualDisplayHeight - expectedDisplaySize) > 1) {
-                    console.warn(`Game: Display size mismatch! Adjusting scale to fix...`);
-                    // Calculate correct scale based on frame size
-                    const targetFrameSize = CONFIG.TILE_SIZE;
-                    const currentFrameSize = finalFrame ? finalFrame.width : frameWidth;
-                    const correctScale = targetFrameSize / currentFrameSize;
-                    this.player.setScale(correctScale);
-                    console.log(`Game: Adjusted scale to ${correctScale} to achieve ${expectedDisplaySize}x${expectedDisplaySize} display size`);
-                    console.log(`Game: New display size: ${this.player.displayWidth}x${this.player.displayHeight}`);
-                }
-                
-                console.log(`Game: Player sprite created at 1:1 scale (${CONFIG.TILE_SIZE}x${CONFIG.TILE_SIZE} frames)`);
-                console.log(`Game: Player display size: ${this.player.displayWidth}x${this.player.displayHeight}`);
-                
-                // Adjust body size to match scaled sprite exactly
-                // Collision box should be same size as the actual displayed sprite (after scaling)
+                // Set up collision box - align bottom with sprite feet
                 if (this.player.body) {
-                   // Get actual displayed sprite dimensions (after scaling)
-                   const spriteWidth = this.player.displayWidth || CONFIG.TILE_SIZE;
-                   const spriteHeight = this.player.displayHeight || CONFIG.TILE_SIZE;
-                   
-                   // Set collision box to match the scaled sprite size exactly
-                   this.player.body.setSize(spriteWidth, spriteHeight);
-                   
-                   // With origin 0.5,1.0 (bottom-center), the sprite's visual bottom is at Y position
-                   // The physics body is centered on the sprite position by default
-                   // We need to offset it down by half the height to align the body bottom with sprite bottom (feet)
-                   // Offset: (0, -spriteHeight/2) moves body down so its bottom aligns with sprite bottom
-                   this.player.body.setOffset(0, -spriteHeight / 2);
-                   
-                   console.log(`Game: Player collision box set to ${spriteWidth}x${spriteHeight} (matches scaled sprite size)`);
-                   
-                    // Fix sliding: Add high drag
-                    this.player.setDragX(CONFIG.PHYSICS.PLAYER_DRAG_X); 
+                    // Get the actual displayed size (after scaling)
+                    const displayWidth = this.player.displayWidth;
+                    const displayHeight = this.player.displayHeight;
                     
-                    // Save frame size for offset calculations in update() (using universal tile size)
-                    this.player.frameSize = CONFIG.TILE_SIZE;
+                    // Collision box matches sprite size
+                    this.player.body.setSize(displayWidth, displayHeight);
+                    
+                    // With origin (0.5, 1.0), sprite Y position is at the feet (bottom)
+                    // Body center is at sprite position by default
+                    // To align body bottom with sprite bottom (feet), move body center UP
+                    // Body extends from (y - height/2) to (y + height/2)
+                    // We want body bottom at y (feet), so body center should be at (y - height/2)
+                    // Offset: (0, -displayHeight/2) moves body center UP so body bottom aligns with sprite bottom
+                    this.player.body.setOffset(0, -displayHeight / 2);
+                    
+                    console.log(`Game: Player collision box: ${displayWidth}x${displayHeight}, offset: (0, ${-displayHeight/2})`);
+                    console.log(`Game: Sprite origin: (0.5, 1.0) - feet at Y position, collision box bottom aligned with feet`);
+                    
+                    // Fix sliding: Add high drag
+                    this.player.setDragX(CONFIG.PHYSICS.PLAYER_DRAG_X);
+                } else {
+                    console.error('Game: ERROR - Player body does not exist after sprite creation!');
                 }
                 
                 // Ensure player is rendered ON TOP of the level
@@ -928,16 +887,51 @@ export class Game {
                     // Verify platform body exists
                     const platformBody = this.platforms.children.entries[0]?.body;
                     if (platformBody) {
+                        // CRITICAL: Ensure bodies are properly positioned before creating collider
+                        // Refresh both bodies to ensure positions are synced, but preserve offsets and size
+                        this.player.body.updateFromGameObject();
+                        // Re-apply size and offset after update (updateFromGameObject may reset them)
+                        const frame = this.player.frame;
+                        const frameWidth = frame ? frame.width : CONFIG.TILE_SIZE;
+                        const frameHeight = frame ? frame.height : CONFIG.TILE_SIZE;
+                        const displayWidth = this.player.displayWidth || frameWidth;
+                        const displayHeight = this.player.displayHeight || frameHeight;
+                        const spriteWidth = Math.max(displayWidth, frameWidth);
+                        const spriteHeight = Math.max(displayHeight, frameHeight);
+                        this.player.body.setSize(spriteWidth, spriteHeight);
+                        this.player.body.setOffset(0, -spriteHeight / 2);
+                        
+                        platformBody.updateFromGameObject();
+                        
                         const collider = scene.physics.add.collider(this.player, this.platforms);
                         console.log('Game: ✓ Player-platform collider added');
                         console.log(`Game: Collider active: ${collider ? 'YES' : 'NO'}, platforms count: ${this.platforms.children.size}`);
                         
                         // Log detailed body information for debugging
-                        const playerBottom = this.player.body.y + (this.player.body.height / 2) + (this.player.body.offset?.y || 0);
-                        const floorTop = platformBody.y - (platformBody.height / 2) + (platformBody.offset?.y || 0);
-                        console.log(`Game: Player body - position=(${this.player.body.x.toFixed(1)}, ${this.player.body.y.toFixed(1)}), size=${this.player.body.width.toFixed(1)}x${this.player.body.height.toFixed(1)}, offset=(${(this.player.body.offset?.x || 0).toFixed(1)}, ${(this.player.body.offset?.y || 0).toFixed(1)}), bottom=${playerBottom.toFixed(1)}`);
-                        console.log(`Game: Floor body - position=(${platformBody.x.toFixed(1)}, ${platformBody.y.toFixed(1)}), size=${platformBody.width.toFixed(1)}x${platformBody.height.toFixed(1)}, offset=(${(platformBody.offset?.x || 0).toFixed(1)}, ${(platformBody.offset?.y || 0).toFixed(1)}), top=${floorTop.toFixed(1)}`);
+                        // Calculate actual body bounds including offset
+                        const playerBodyCenterY = this.player.body.y;
+                        const playerBodyHeight = this.player.body.height;
+                        const playerBodyOffsetY = this.player.body.offset?.y || 0;
+                        const playerTop = playerBodyCenterY - (playerBodyHeight / 2) + playerBodyOffsetY;
+                        const playerBottom = playerBodyCenterY + (playerBodyHeight / 2) + playerBodyOffsetY;
+                        
+                        const floorBodyCenterY = platformBody.y;
+                        const floorBodyHeight = platformBody.height;
+                        const floorBodyOffsetY = platformBody.offset?.y || 0;
+                        const floorTop = floorBodyCenterY - (floorBodyHeight / 2) + floorBodyOffsetY;
+                        const floorBottom = floorBodyCenterY + (floorBodyHeight / 2) + floorBodyOffsetY;
+                        
+                        console.log(`Game: Player body - center=(${this.player.body.x.toFixed(1)}, ${playerBodyCenterY.toFixed(1)}), size=${this.player.body.width.toFixed(1)}x${playerBodyHeight.toFixed(1)}, offset=(0, ${playerBodyOffsetY.toFixed(1)}), top=${playerTop.toFixed(1)}, bottom=${playerBottom.toFixed(1)}`);
+                        console.log(`Game: Floor body - center=(${platformBody.x.toFixed(1)}, ${floorBodyCenterY.toFixed(1)}), size=${platformBody.width.toFixed(1)}x${floorBodyHeight.toFixed(1)}, offset=(0, ${floorBodyOffsetY.toFixed(1)}), top=${floorTop.toFixed(1)}, bottom=${floorBottom.toFixed(1)}`);
                         console.log(`Game: Player bottom (${playerBottom.toFixed(1)}) should be above floor top (${floorTop.toFixed(1)})`);
+                        console.log(`Game: Player sprite Y (feet)=${this.player.y.toFixed(1)}, should be at or above floor top`);
+                        
+                        // Verify collision will work
+                        if (playerBottom > floorTop) {
+                            console.warn(`Game: ⚠️ WARNING - Player bottom (${playerBottom.toFixed(1)}) is below floor top (${floorTop.toFixed(1)})! Collision may not work correctly.`);
+                        } else {
+                            console.log(`Game: ✓ Player is positioned correctly above floor`);
+                        }
                     } else {
                         console.error('Game: ERROR - Platform body does not exist!');
                     }
@@ -961,6 +955,10 @@ export class Game {
             // Initialize physics debug based on debug mode (collision boxes only visible in debug mode)
             if (scene.physics && scene.physics.world) {
                 scene.physics.world.drawDebug = this.debugMode || CONFIG.DEBUG_MODE;
+                // Clear debug graphics to prevent duplicate boxes
+                if (scene.physics.world.debugGraphic) {
+                    scene.physics.world.debugGraphic.clear();
+                }
             }
             
             // Set up camera to follow player (enables background scrolling)
@@ -968,7 +966,9 @@ export class Game {
                 scene.cameras.main.startFollow(this.player, true, 0.1, 0.1);
                 scene.cameras.main.setDeadzone(0, 0);
             }
-            // Create animations
+            
+            // CRITICAL: Create animations AFTER player body is fully set up
+            // This ensures collision box is in place before any animations play
             this.createAnimations(scene);
 
             // Input
@@ -2378,6 +2378,23 @@ export class Game {
             
             if (!this.player || !this.player.body || !this.cursors) return;
             
+            // Maintain collision box - ensure size and offset are correct
+            // With origin (0.5, 1.0), sprite Y position is at feet, body bottom should align with feet
+            const displayWidth = this.player.displayWidth;
+            const displayHeight = this.player.displayHeight;
+            const currentBodyWidth = this.player.body.width;
+            const currentBodyHeight = this.player.body.height;
+            const expectedOffsetY = -displayHeight / 2;
+            const currentOffsetY = this.player.body.offset?.y || 0;
+            
+            // Update if size or offset changed significantly
+            if (Math.abs(currentBodyWidth - displayWidth) > 0.1 || Math.abs(currentBodyHeight - displayHeight) > 0.1) {
+                this.player.body.setSize(displayWidth, displayHeight);
+            }
+            if (Math.abs(currentOffsetY - expectedOffsetY) > 0.1) {
+                this.player.body.setOffset(0, expectedOffsetY);
+            }
+            
             const isOnGround = this.player.body.onFloor() || this.player.body.touching.down;
 
             // Use universal tile size for all calculations
@@ -2753,9 +2770,17 @@ export class Game {
         console.log(`Debug Mode: ${this.debugMode ? 'ON' : 'OFF'}`);
         
         // Toggle physics debug visualization
-        if (this.currentScene && this.currentScene.physics) {
+        if (this.currentScene && this.currentScene.physics && this.currentScene.physics.world) {
             this.currentScene.physics.world.drawDebug = this.debugMode;
-            this.currentScene.physics.world.debugGraphic.clear();
+            // Clear debug graphics to prevent duplicate boxes
+            if (this.currentScene.physics.world.debugGraphic) {
+                this.currentScene.physics.world.debugGraphic.clear();
+            }
+            // Force a redraw to ensure only one box per body
+            if (this.debugMode && this.currentScene.physics.world.debugGraphic) {
+                // Clear and redraw to avoid duplicates
+                this.currentScene.physics.world.debugGraphic.clear();
+            }
         }
         
         // Toggle platform/hazard visibility (for debugging collision boxes)

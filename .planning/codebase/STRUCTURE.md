@@ -9,6 +9,13 @@ MyPup/
 ├── assets/                # Static assets
 │   ├── Cat.png           # Cat enemy sprite (fallback)
 │   └── MyPupLogo.png     # Game logo
+├── backend/              # Google Cloud Functions backend
+│   ├── index.js         # Cloud Function entry point (API proxy)
+│   ├── package.json     # Backend dependencies
+│   ├── README.md        # Backend setup instructions
+│   ├── DEPLOY.md        # Deployment guide
+│   ├── TROUBLESHOOTING.md # Backend troubleshooting
+│   └── setup.sh         # Automated setup script
 ├── dist/                  # Compiled JavaScript (TypeScript output)
 │   ├── api.js
 │   ├── AssetStorage.js
@@ -36,7 +43,8 @@ MyPup/
 ├── README.md             # Project documentation
 ├── BUILD.md              # Build instructions
 ├── DEVELOPMENT.md        # Development guide
-└── GITHUB_PAGES_SETUP.md # GitHub Pages deployment guide
+├── GITHUB_PAGES_SETUP.md # GitHub Pages deployment guide
+└── GITHUB_PAGES_WITH_BACKEND.md # Backend + GitHub Pages guide
 ```
 
 ## Source Files (`src/`)
@@ -197,10 +205,38 @@ dist/
 - Build scripts: `build`, `watch`, `dev`
 - Dev dependencies only
 
+## Backend Structure (`backend/`)
+
+### `index.js`
+- **Size**: ~100 lines
+- **Purpose**: Google Cloud Function that proxies Gemini API requests
+- **Function**: `apiProxy` (HTTP trigger)
+- **Responsibilities**:
+  - Receive frontend API requests
+  - Add API key from environment variable
+  - Forward to Gemini API
+  - Handle CORS
+  - Return responses
+
+### `package.json`
+- Backend dependencies (`@google-cloud/functions-framework`)
+- Deployment scripts
+- Cloud Functions framework configuration
+
+### Documentation
+- `README.md` - Setup and deployment instructions
+- `DEPLOY.md` - Quick deployment guide
+- `TROUBLESHOOTING.md` - Common issues and solutions
+- `setup.sh` - Automated setup script
+
 ## Documentation Files
 
 - `README.md` - Project overview and setup
 - `BUILD.md` - Build instructions
 - `DEVELOPMENT.md` - Development guide
 - `GITHUB_PAGES_SETUP.md` - Deployment guide
+- `GITHUB_PAGES_WITH_BACKEND.md` - Backend + GitHub Pages guide
+- `backend/README.md` - Backend setup instructions
+- `backend/DEPLOY.md` - Backend deployment guide
+- `backend/TROUBLESHOOTING.md` - Backend troubleshooting
 - `.planning/codebase/*.md` - Codebase documentation

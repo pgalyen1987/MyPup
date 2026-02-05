@@ -117,6 +117,9 @@ export interface GameConfig {
     GEMINI_API_KEY: string;
     GEMINI_API_URL: string;
     GEMINI_IMAGE_GEN_URL: string;
+    // Backend proxy configuration (optional)
+    BACKEND_API_URL: string;
+    USE_BACKEND_PROXY: boolean;
     
     // Game settings
     GAME_WIDTH: number;
@@ -150,8 +153,6 @@ export interface GameConfig {
 // Extend Window interface for global functions
 declare global {
     interface Window {
-        clearApiKey: () => void;
-        setApiKey: () => Promise<void>;
         updateApiKeyStatus: () => Promise<void>;
         setDebugMode: (enabled: boolean) => void;
         isDebugMode: () => boolean;
@@ -225,10 +226,17 @@ export const CONFIG: GameConfig = {
     DEBUG_MODE: DEBUG_MODE,
     
     // Gemini 3 API configuration
-    // For production: Use environment variables or backend proxy
+    // For production: Use backend proxy (recommended) or environment variables
     // For development: Enter key when prompted (stored in localStorage only)
     GEMINI_API_KEY: '', // ⚠️ NEVER commit real keys to git!
     
+    // Backend proxy configuration (recommended for production)
+    // Set this to your Google Cloud Function URL after deployment
+    // Leave empty to use direct API calls (requires API key in localStorage)
+    BACKEND_API_URL: 'https://apiproxy-kdh2fuqrca-uc.a.run.app', // Your deployed Cloud Function URL
+    USE_BACKEND_PROXY: true, // Set to true to use backend proxy instead of direct API calls
+    
+    // Direct API URLs (used when USE_BACKEND_PROXY is false)
     // Text/Vision analysis: Use Gemini 3 Pro Image Preview for both text and image generation
     // Production: gemini-3-pro-image-preview for all operations
     GEMINI_API_URL: DEBUG_MODE 
@@ -326,9 +334,9 @@ export const CONFIG: GameConfig = {
     // Visual configuration
     VISUAL: {
         // Scaling factors
-        PLAYER_SCALE_DEFAULT: 1.5,
+        PLAYER_SCALE_DEFAULT: 2.5,
         PLAYER_SCALE_FALLBACK: 0.38,
-        PLAYER_TARGET_SIZE_MULTIPLIER: 1.5,
+        PLAYER_TARGET_SIZE_MULTIPLIER: 2.5,
         
         // Collectible visual multipliers
         COLLECTIBLE_OUTER_RADIUS_MULTIPLIER: 0.1875,
@@ -363,96 +371,36 @@ export const CONFIG: GameConfig = {
 
 // Load API keys from environment or localStorage
 async function loadConfig(): Promise<void> {
-    // Try to load from localStorage first
-    const savedGeminiKey = localStorage.getItem('gemini_api_key');
-    
-    if (savedGeminiKey) {
-        CONFIG.GEMINI_API_KEY = savedGeminiKey;
-    }
-    
-    // Update UI to show API key status (this will verify and trigger background generation)
-    await updateApiKeyStatus();
-    
-    // If not in localStorage, don't prompt automatically - let user click button
+    // When using backend proxy, no API key is needed on the client
+    // Config is already set up, just verify backend connection
+    // updateApiKeyStatus will be called from initializeConfig
 }
 
-// Clear API key from localStorage and config
-function clearApiKey(): void {
-    localStorage.removeItem('gemini_api_key');
-    CONFIG.GEMINI_API_KEY = '';
-    // Update status without verification (since key is cleared)
-    const statusEl = document.getElementById('api-key-status');
-    if (statusEl) {
-        statusEl.innerHTML = '⚠ No API Key Set - Click "Set/Change API Key" to enter one';
-        statusEl.style.color = '#ff6b6b';
-    }
-    console.log('API key cleared. Please set a new key to use the game.');
-}
+// API key functions removed - using backend proxy only
 
-// Set or update API key
-// Accepts dependencies to avoid window.* usage
-export async function setApiKey(apiService?: any, preGenerateGameAssets?: () => void): Promise<void> {
-    const key = prompt(
-        'Enter your Gemini 3 API key:\n\n' +
-        '⚠️ SECURITY NOTE: Your key will be stored in this browser\'s localStorage\n' +
-        'and may be visible in DevTools. Only use on trusted devices.\n\n' +
-        'Enter API key (or leave blank to cancel):'
-    );
-    
-    if (key && key.trim()) {
-        CONFIG.GEMINI_API_KEY = key.trim();
-        localStorage.setItem('gemini_api_key', CONFIG.GEMINI_API_KEY);
-        await updateApiKeyStatus(apiService, preGenerateGameAssets); // This will verify and trigger background generation
-        console.log('API key saved and verified.');
-    } else if (key === '') {
-        // User cancelled
-        return;
-    }
-}
-
-// Update the API key status display
-// Accepts dependencies to avoid window.* usage
+// Update the backend connection status
 export async function updateApiKeyStatus(apiService?: any, preGenerateGameAssets?: () => void): Promise<void> {
-    const statusEl = document.getElementById('api-key-status');
-    if (statusEl) {
-        if (CONFIG.GEMINI_API_KEY) {
-            // Show masked key (first 10 and last 4 characters)
-            const maskedKey = CONFIG.GEMINI_API_KEY.substring(0, 10) + '...' + 
-                            CONFIG.GEMINI_API_KEY.substring(CONFIG.GEMINI_API_KEY.length - 4);
-            statusEl.innerHTML = `⏳ Verifying API Key: <code>${maskedKey}</code>...`;
-            statusEl.style.color = '#ffd700';
-            
-            // Verify the API key
-            if (apiService) {
-                const verification = await apiService.verifyApiKey();
-                if (verification.valid) {
-                    statusEl.innerHTML = `✓ API Key Verified: <code>${maskedKey}</code>`;
-                    statusEl.style.color = '#4CAF50';
-                    
-                    // Trigger asset pre-generation immediately after successful verification
-                    if (preGenerateGameAssets) {
-                        console.log('API key verified, starting asset pre-generation...');
-                        // Don't await - let it run in background, but catch errors
-                        Promise.resolve(preGenerateGameAssets()).catch((error: any) => {
-                            console.error('Error during asset pre-generation:', error);
-                        });
-                    } else {
-                        console.warn('updateApiKeyStatus: preGenerateGameAssets function not provided');
-                    }
-                } else {
-                    statusEl.innerHTML = `❌ API Key Invalid: <code>${maskedKey}</code><br><small>${verification.error}</small>`;
-                    statusEl.style.color = '#ff6b6b';
+    // When using backend proxy, just verify the connection
+    if (CONFIG.USE_BACKEND_PROXY && CONFIG.BACKEND_API_URL) {
+        if (apiService) {
+            const verification = await apiService.verifyApiKey();
+            if (verification.valid) {
+                console.log('✓ Backend proxy connected and verified');
+                if (preGenerateGameAssets) {
+                    console.log('Backend verified, starting asset pre-generation...');
+                    Promise.resolve(preGenerateGameAssets()).catch((error: any) => {
+                        console.error('Error during asset pre-generation:', error);
+                    });
                 }
             } else {
-                // API service not ready yet, just show key is set
-                statusEl.innerHTML = `✓ API Key Set: <code>${maskedKey}</code>`;
-                statusEl.style.color = '#4CAF50';
+                console.warn(`⚠️ Backend connection issue: ${verification.error || 'Unable to verify'}`);
             }
-        } else {
-            statusEl.innerHTML = '⚠ No API Key Set - Click "Set/Change API Key" to enter one';
-            statusEl.style.color = '#ff6b6b';
         }
+        return;
     }
+    
+    // If not using backend proxy, log a warning (shouldn't happen in production)
+    console.warn('⚠️ Backend proxy not configured. API key management removed from frontend.');
 }
 
 // Initialize config on load
@@ -492,36 +440,11 @@ export async function initializeConfig(apiService?: any, preGenerateGameAssets?:
             }
         });
         
-        // Set up clear API key button
-        const clearBtn = document.getElementById('clear-api-key-btn');
-        if (clearBtn) {
-            // Remove existing listeners to avoid duplicates
-            const newClearBtn = clearBtn.cloneNode(true);
-            clearBtn.parentNode?.replaceChild(newClearBtn, clearBtn);
-            newClearBtn.addEventListener('click', () => {
-                if (confirm('Are you sure you want to clear the API key? You will need to enter it again to use the game.')) {
-                    clearApiKey();
-                }
-            });
-        }
-        
-        // Set up set/change API key button
-        const setBtn = document.getElementById('set-api-key-btn');
-        if (setBtn) {
-            // Remove existing listeners to avoid duplicates
-            const newSetBtn = setBtn.cloneNode(true);
-            setBtn.parentNode?.replaceChild(newSetBtn, setBtn);
-            newSetBtn.addEventListener('click', async () => {
-                await setApiKey(apiService, preGenerateGameAssets);
-            });
-        }
+        // API key buttons removed - using backend proxy only
     }
     
-    // Export functions for global access (needed for HTML button handlers)
-    // These are minimal window exports required for UI functionality
+    // Export functions for global access
     if (typeof window !== 'undefined') {
-        window.clearApiKey = clearApiKey;
-        window.setApiKey = () => setApiKey(apiService, preGenerateGameAssets);
         window.updateApiKeyStatus = () => updateApiKeyStatus(apiService, preGenerateGameAssets);
         window.setDebugMode = setDebugMode;
         window.isDebugMode = () => CONFIG.DEBUG_MODE;

@@ -27,6 +27,20 @@
 - **ipapi.co** - IP geolocation for location-based backgrounds
 - **Open-Meteo API** - Weather data for background generation
 
+## Backend Infrastructure
+
+### Google Cloud Functions (2nd Gen)
+- **Runtime**: Node.js 20
+- **Framework**: @google-cloud/functions-framework
+- **Purpose**: Secure API proxy for Gemini API requests
+- **Deployment**: Google Cloud Platform
+- **Trigger**: HTTP (public endpoint)
+- **Environment**: API key stored as environment variable
+
+### Backend Dependencies
+- `@google-cloud/functions-framework: ^3.3.0` - Cloud Functions runtime
+- `@types/node: ^20.0.0` - TypeScript definitions
+
 ## Build Tools & Development
 
 ### Compiler
@@ -42,6 +56,7 @@
 - **Node.js** - Runtime environment
 - **npm** - Package manager
 - **@types/node 20.10.0** - TypeScript definitions
+- **Google Cloud SDK** - For backend deployment
 
 ## Storage & Persistence
 
@@ -75,6 +90,15 @@
 - **No source maps** - Disabled for production
 
 ## Runtime Environment
+
+### Frontend
 - **Browser** - Chrome, Firefox, Safari, Edge
 - **ES Modules** - Native module support required
 - **No Node.js** - Pure client-side application
+- **Hosting**: GitHub Pages (static hosting)
+
+### Backend
+- **Node.js 20** - Google Cloud Functions runtime
+- **Hosting**: Google Cloud Platform
+- **Region**: us-central1 (configurable)
+- **Scaling**: Automatic (serverless)

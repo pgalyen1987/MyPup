@@ -196,14 +196,51 @@ error-handler.ts
 - Texture disposal
 - Timer cleanup
 
+## Backend Architecture
+
+### Google Cloud Function Proxy
+- **Purpose**: Secure API key management
+- **Location**: `backend/index.js`
+- **Function**: `apiProxy`
+- **Responsibilities**:
+  - Receive frontend API requests
+  - Add API key from environment variable
+  - Forward requests to Gemini API
+  - Return responses to frontend
+  - Handle CORS for GitHub Pages
+
+### Backend-Frontend Communication
+- Frontend sends requests to backend URL
+- Backend adds API key server-side
+- Backend proxies to Gemini API
+- Response returned to frontend
+- API key never exposed to client
+
+### Configuration Modes
+- **Backend Proxy Mode** (Production): `USE_BACKEND_PROXY: true`
+  - API key stored in Google Cloud
+  - Frontend has no API key
+  - Secure for public hosting
+- **Direct API Mode** (Development): `USE_BACKEND_PROXY: false`
+  - API key in localStorage
+  - Direct API calls
+  - For local development
+
 ## Security Considerations
 
-### Client-Side Only
-- API keys visible in source code
-- No backend proxy
-- Security warnings in README
+### Production (Backend Proxy)
+- ✅ API key stored securely in Google Cloud
+- ✅ API key never exposed to frontend
+- ✅ Safe to commit frontend code to GitHub
+- ✅ CORS configured for GitHub Pages domain
+
+### Development (Direct API)
+- ⚠️ API key stored in localStorage (visible to user)
+- ⚠️ API key in URL query parameter (visible in network logs)
+- ⚠️ Security warnings in README
+- ⚠️ User responsible for key security
 
 ### API Key Storage
-- localStorage (visible to user)
-- No encryption
-- User responsible for key security
+- **Production**: Google Cloud environment variables
+- **Development**: localStorage (visible to user)
+- **No encryption** in localStorage mode

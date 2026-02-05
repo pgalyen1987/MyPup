@@ -70,10 +70,25 @@
 - Potential for rate limit issues with high usage
 
 #### Security
-- API key stored in localStorage (visible to user)
-- API key in URL query parameter (visible in network logs)
-- No backend proxy (client-side only)
-- Security warnings in README
+
+**Production Mode (Backend Proxy)**:
+- ✅ API key stored in Google Cloud environment variables
+- ✅ API key never sent to frontend
+- ✅ Backend proxy handles all API calls
+- ✅ Safe for public GitHub Pages hosting
+- ✅ CORS configured for specific domain
+
+**Development Mode (Direct API)**:
+- ⚠️ API key stored in localStorage (visible to user)
+- ⚠️ API key in URL query parameter (visible in network logs)
+- ⚠️ Security warnings in README
+- ⚠️ Not recommended for production
+
+#### Backend Proxy Integration
+- **Endpoint**: Google Cloud Function URL (e.g., `https://apiproxy-xxxxx-uc.a.run.app`)
+- **Request Format**: Wrapped in `{ endpoint, model, requestBody }`
+- **Response Format**: Same as direct API (transparent proxy)
+- **Configuration**: `USE_BACKEND_PROXY: true` in `src/config.ts`
 
 ### IP Geolocation API (ipapi.co)
 
@@ -291,16 +306,53 @@
 - Rate limits unknown
 - Public API
 
+## Backend Integration
+
+### Google Cloud Functions Proxy
+
+#### Purpose
+- Secure API key management
+- Hide API key from frontend
+- Enable public GitHub Pages hosting
+
+#### Implementation
+- **File**: `backend/index.js`
+- **Function**: `apiProxy`
+- **Runtime**: Node.js 20
+- **Trigger**: HTTP (public)
+
+#### Request Flow
+1. Frontend sends request to backend URL
+2. Backend receives `{ endpoint, model, requestBody }`
+3. Backend adds API key from environment variable
+4. Backend forwards to Gemini API
+5. Backend returns response to frontend
+
+#### Configuration
+- API key set during deployment: `--set-env-vars GEMINI_API_KEY=$GEMINI_API_KEY`
+- CORS headers configured for GitHub Pages
+- Memory: 512MB
+- Timeout: 540s (for long image generation)
+
+#### Deployment
+- Deployed via `gcloud functions deploy`
+- Region: us-central1
+- Public endpoint (no authentication required)
+- Auto-scaling based on traffic
+
 ## Future Integration Considerations
 
 ### Potential Additions
-- Backend proxy for API keys (security)
+- ✅ Backend proxy for API keys (security) - **IMPLEMENTED**
 - Analytics integration (usage tracking)
 - Error reporting service (Sentry, etc.)
 - CDN for generated assets (performance)
+- Rate limiting in backend
+- Request quotas per user
 
 ### Improvements Needed
-- API key security (backend proxy)
-- Rate limiting handling
-- Quota monitoring
+- ✅ API key security (backend proxy) - **IMPLEMENTED**
+- Rate limiting handling (backend-side)
+- Quota monitoring (Cloud Monitoring)
 - Error reporting service
+- Request logging and analytics

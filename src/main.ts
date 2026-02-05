@@ -6,7 +6,7 @@
  */
 
 // Import all modules so they execute and export to window (temporary during refactoring)
-import './config.js'; // Initializes CONFIG and sets up API key handlers
+import { CONFIG } from './config.js'; // Initializes CONFIG and sets up API key handlers
 import './api.js'; // Imports APIService class (no longer exports to window)
 import './game.js'; // Imports Game class (no longer exports to window)
 
@@ -23,12 +23,11 @@ const apiService = new APIService();
 // Initialize CharacterManager with all dependencies
 const characterManager = new CharacterManager(apiService, assetStorage, Game);
 
-// Start background generation IMMEDIATELY if we have an API key and no valid cache
+// Start background generation IMMEDIATELY if backend is configured
 // Don't wait for DOM or other initialization - start as soon as possible
 (async () => {
-    // Check if we have an API key
-    const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey) {
+    // Check if backend proxy is configured
+    if (CONFIG.USE_BACKEND_PROXY && CONFIG.BACKEND_API_URL) {
         // Check if background is already cached and valid
         const cachedMeta = localStorage.getItem('location_background_meta');
         let needsGeneration = true;
@@ -124,22 +123,12 @@ async function clearPlayerSpriteCache(): Promise<void> {
 
 // Utility function to clear cat sprite sheet cache (for testing)
 async function clearCatCache(): Promise<void> {
-    console.log('Clearing cat sprite sheet cache...');
-    
-    // Clear AssetStorage (IndexedDB) - cat spritesheet is stored here if AI-generated
-    try {
-        await assetStorage.removeItem('cat_enemy_spritesheet');
-        console.log('✓ Cat sprite sheet cache cleared from AssetStorage (IndexedDB)');
-    } catch (error) {
-        console.warn('Could not clear from AssetStorage:', error);
-    }
-    
-    console.log('Cat sprite sheet cache cleared!');
-    console.log('⚠️  Note: The Cat.png file is loaded from assets/Cat.png');
-    console.log('⚠️  To force reload the new 256x256 image, do a hard refresh:');
+    // Note: Cat sprites use static Cat.png from assets folder, no cache to clear
+    console.log('⚠️  Note: The Cat.png file is loaded from assets/Cat.png (static asset, no cache)');
+    console.log('⚠️  To force reload, do a hard refresh:');
     console.log('   - Chrome/Edge: Ctrl+Shift+R (Windows/Linux) or Cmd+Shift+R (Mac)');
     console.log('   - Firefox: Ctrl+F5 (Windows/Linux) or Cmd+Shift+R (Mac)');
-    console.log('   - Or clear browser cache for localhost:8000');
+    console.log('   - Safari: Cmd+Option+R');
 }
 
 // Export to window for easy console access
@@ -154,8 +143,9 @@ if (typeof window !== 'undefined') {
 
 // Asset pre-generation functions (moved from index.html inline script)
 async function generateLocationBackground(): Promise<void> {
-    if (!apiService.apiKey) {
-        console.log('generateLocationBackground: No API key available, skipping background generation');
+    // Verify backend proxy is configured
+    if (!CONFIG.USE_BACKEND_PROXY || !CONFIG.BACKEND_API_URL) {
+        console.log('generateLocationBackground: Backend proxy not configured, skipping background generation');
         return;
     }
 
@@ -231,34 +221,13 @@ async function generateLocationBackground(): Promise<void> {
 
 // generateLevelTilesPreload function removed - no longer using AI-generated tiles
 
-async function generateEnemySpritesPreload(): Promise<void> {
-    if (!apiService.apiKey) return;
-
-    try {
-        // Check cache
-        const cachedCat = await assetStorage.getItem('enemy_cat_spritesheet');
-        if (cachedCat) {
-            console.log('Cat enemy sprites already cached in AssetStorage.');
-            return;
-        }
-        
-        console.log('Pre-generating cat enemy spritesheet...');
-        const spriteUrl = await apiService.generateEnemySpriteSheet('cat');
-        
-        await assetStorage.setItem('enemy_cat_spritesheet', spriteUrl);
-        console.log('Cat enemy spritesheet pre-generated and cached.');
-    } catch (error) {
-        console.error('Pre-generation of enemy sprites failed:', error);
-    }
-}
+// generateEnemySpritesPreload function removed - enemies use static Cat.png from assets folder
 
 async function preGenerateGameAssets(): Promise<void> {
     console.log('Starting game asset pre-generation...');
-    // Run in parallel (except background which must be sequential)
-    await Promise.all([
-        generateLocationBackground(),
-        generateEnemySpritesPreload()
-    ]);
+    // Only generate background - enemies use static Cat.png from assets folder
+    await generateLocationBackground();
+    // Note: Enemy sprites use static Cat.png from assets/Cat.png, no AI generation needed
     console.log('Asset pre-generation complete or skipped due to cache.');
 }
 
@@ -288,14 +257,17 @@ async function initializeApp() {
     const { initializeConfig, updateApiKeyStatus } = await import('./config.js');
     await initializeConfig(apiService, preGenerateGameAssets);
     
-    // Check if we have an API key and start pre-generation for missing/old assets
+    // Check if we have API access (either backend proxy or direct API key)
+    const hasBackend = CONFIG.USE_BACKEND_PROXY && CONFIG.BACKEND_API_URL;
     const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey && apiService.apiKey) {
-        console.log('API key found, checking if assets need pre-generation...');
-        // updateApiKeyStatus will trigger preGenerateGameAssets if key is valid
+    const hasDirectKey = savedKey && apiService.apiKey;
+    
+    if (hasBackend || hasDirectKey) {
+        console.log(hasBackend ? 'Backend proxy configured, checking if assets need pre-generation...' : 'API key found, checking if assets need pre-generation...');
+        // updateApiKeyStatus will trigger preGenerateGameAssets if connection/key is valid
         await updateApiKeyStatus(apiService, preGenerateGameAssets);
     } else {
-        console.log('No API key found, asset generation will start when key is set');
+        console.log('No API access configured (neither backend proxy nor API key), asset generation will start when configured');
     }
 }
 

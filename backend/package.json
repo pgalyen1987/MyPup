@@ -1,0 +1,16 @@
+{
+  "name": "mypup-backend",
+  "version": "1.0.0",
+  "description": "Backend proxy for MyPup game API requests",
+  "main": "index.js",
+  "scripts": {
+    "start": "functions-framework --target=apiProxy",
+    "deploy": "gcloud functions deploy apiProxy --gen2 --runtime=nodejs20 --region=us-central1 --source=. --entry-point=apiProxy --trigger-http --allow-unauthenticated --set-env-vars GEMINI_API_KEY=YOUR_API_KEY_HERE"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0"
+  }
+}

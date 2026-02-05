@@ -2,6 +2,9 @@
 
 import { CONFIG } from './config.js';
 
+// Helper to get DEBUG_MODE
+const DEBUG_MODE = CONFIG.DEBUG_MODE;
+
 // Type definitions
 interface ApiError {
   type: string;
@@ -51,34 +54,116 @@ export class APIService {
     }
 
     get apiKey() {
+        // If using backend proxy, API key is not needed on client side
+        if (CONFIG.USE_BACKEND_PROXY) {
+            return ''; // Backend handles API key
+        }
         // Try to get from CONFIG first, then localStorage
         return CONFIG.GEMINI_API_KEY || localStorage.getItem('gemini_api_key') || '';
     }
 
     /**
+     * Get the API endpoint URL (either backend proxy or direct Gemini API)
+     */
+    private getApiUrl(model: string, endpoint: string = 'generateContent'): string {
+        if (CONFIG.USE_BACKEND_PROXY && CONFIG.BACKEND_API_URL) {
+            // Use backend proxy - API key is handled server-side
+            return CONFIG.BACKEND_API_URL;
+        } else {
+            // Use direct Gemini API - requires API key in query string
+            const baseUrl = model.includes('image') ? CONFIG.GEMINI_IMAGE_GEN_URL : CONFIG.GEMINI_API_URL;
+            // Extract base URL without key
+            const urlWithoutKey = baseUrl.split('?')[0];
+            return `${urlWithoutKey}?key=${this.apiKey}`;
+        }
+    }
+
+    /**
+     * Make an API request (either to backend proxy or direct Gemini API)
+     */
+    private async makeApiRequest(model: string, requestBody: any, endpoint: string = 'generateContent'): Promise<Response> {
+        const url = this.getApiUrl(model, endpoint);
+        
+        if (CONFIG.USE_BACKEND_PROXY && CONFIG.BACKEND_API_URL) {
+            // Request to backend proxy
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    endpoint: endpoint,
+                    model: model,
+                    requestBody: requestBody
+                })
+            });
+        } else {
+            // Direct request to Gemini API
+            return fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            });
+        }
+    }
+
+    /**
      * Verify API key by making a simple test request
+     * Works with both backend proxy and direct API modes
      */
     async verifyApiKey(): Promise<{ valid: boolean; error?: string }> {
+        // If using backend proxy, check if backend URL is configured
+        if (CONFIG.USE_BACKEND_PROXY) {
+            if (!CONFIG.BACKEND_API_URL) {
+                return { valid: false, error: 'Backend API URL not configured' };
+            }
+            // Test backend connection
+            try {
+                const model = DEBUG_MODE ? 'gemini-2.5-flash' : 'gemini-3-pro-image-preview';
+                const requestBody = {
+                    contents: [{
+                        parts: [{ text: 'Say "OK" if you can read this.' }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.1,
+                        maxOutputTokens: 10,
+                    }
+                };
+                
+                const response = await this.makeApiRequest(model, requestBody);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    const errorInfo = this.parseApiError(errorText, response.status);
+                    return { valid: false, error: errorInfo.message };
+                }
+
+                const data = await response.json();
+                if (data.candidates && data.candidates.length > 0) {
+                    return { valid: true };
+                } else {
+                    return { valid: false, error: 'Invalid API response' };
+                }
+            } catch (error) {
+                return { valid: false, error: error.message || 'Network error' };
+            }
+        }
+
+        // Direct API key verification
         if (!this.apiKey) {
             return { valid: false, error: 'No API key provided' };
         }
 
         try {
             // Make a simple test request to verify the key works
-            const response = await fetch(
-                `${CONFIG.GEMINI_API_URL}?key=${this.apiKey}`,
+            const response = await this.makeApiRequest(
+                DEBUG_MODE ? 'gemini-2.5-flash' : 'gemini-3-pro-image-preview',
                 {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [{ text: 'Say "OK" if you can read this.' }]
-                        }],
-                        generationConfig: {
-                            temperature: 0.1,
-                            maxOutputTokens: 10,
-                        }
-                    })
+                    contents: [{
+                        parts: [{ text: 'Say "OK" if you can read this.' }]
+                    }],
+                    generationConfig: {
+                        temperature: 0.1,
+                        maxOutputTokens: 10,
+                    }
                 }
             );
 
@@ -243,43 +328,39 @@ export class APIService {
             if (imageBase64.startsWith('data:image/png')) mimeType = "image/png";
             else if (imageBase64.startsWith('data:image/webp')) mimeType = "image/webp";
 
-            // Use the unified Gemini 2.0 Flash endpoint
-            console.log('Analyzing image with:', CONFIG.GEMINI_API_URL);
+            // Use the unified Gemini endpoint (via backend proxy or direct)
+            const model = DEBUG_MODE ? 'gemini-2.5-flash' : 'gemini-3-pro-image-preview';
+            console.log('Analyzing image with:', CONFIG.USE_BACKEND_PROXY ? 'Backend Proxy' : model);
             
-            let response = await fetch(
-                `${CONFIG.GEMINI_API_URL}?key=${this.apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                {
-                                    text: `Analyze this dog image and describe its core visual traits for a 16-bit retro sprite artist.
-                                    
-                                    Focus exclusively on:
-                                    - Breed/Type and Body Shape
-                                    - Primary and Secondary Colors
-                                    - Distinctive Markings (spots, patches, ear color)
-                                    - Eyes and Expressions
-                                    - Any visible accessories (collar, bandana)
-                                    `
-                                },
-                                {
-                                    inline_data: {
-                                        mime_type: mimeType,
-                                        data: base64Data
-                                    }
-                                }
-                            ]
-                        }],
-                        generationConfig: {
-                            temperature: 0.4,
-                            maxOutputTokens: 1024,
+            const requestBody = {
+                contents: [{
+                    parts: [
+                        {
+                            text: `Analyze this dog image and describe its core visual traits for a 16-bit retro sprite artist.
+                            
+                            Focus exclusively on:
+                            - Breed/Type and Body Shape
+                            - Primary and Secondary Colors
+                            - Distinctive Markings (spots, patches, ear color)
+                            - Eyes and Expressions
+                            - Any visible accessories (collar, bandana)
+                            `
+                        },
+                        {
+                            inline_data: {
+                                mime_type: mimeType,
+                                data: base64Data
+                            }
                         }
-                    })
+                    ]
+                }],
+                generationConfig: {
+                    temperature: 0.4,
+                    maxOutputTokens: 1024,
                 }
-            );
+            };
+            
+            let response = await this.makeApiRequest(model, requestBody);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -318,6 +399,13 @@ export class APIService {
             
             console.log('📝 Extracted dog analysis:', analysis);
             console.log('📏 Analysis length:', analysis.length, 'characters');
+            console.log('📋 Analysis preview (first 200 chars):', analysis.substring(0, 200));
+            
+            // Verify analysis is not empty
+            if (!analysis || analysis.trim().length === 0) {
+                console.error('⚠️ WARNING: Dog analysis is empty! This will cause sprite generation to fail.');
+                throw new Error('Dog image analysis returned empty result. Please try again.');
+            }
             
             // Construct a highly rigid structural prompt
             const tileSize = CONFIG.TILE_SIZE;
@@ -333,6 +421,15 @@ MANDATORY IMAGE SIZE - READ THIS FIRST:
 
 CHARACTER DESCRIPTION (from image analysis):
 ${analysis}
+
+CRITICAL - ACCURACY REQUIREMENTS:
+- The dog MUST match the visual description above EXACTLY.
+- Use the EXACT colors, markings, and features described in the analysis.
+- If the analysis mentions specific colors (e.g., "brown and white"), use those EXACT colors.
+- If the analysis mentions distinctive features (spots, patches, ear color, collar), include them EXACTLY.
+- The dog's breed/type and body shape from the analysis must be accurately represented.
+- Do NOT simplify or generalize - match the specific dog from the image analysis.
+
 STYLE: SNES-era pixel art, vibrant colors, clean outlines, 16-bit aesthetic.
 
 CRITICAL IMAGE REQUIREMENTS:
@@ -367,10 +464,21 @@ Row 4 (Bottom Row, Y=${tileSize*3} to Y=${tileSize*4-1}):
   Frame 14: Idle - Frame 3 (X=${tileSize*2} to X=${tileSize*3-1})
   Frame 15: Idle - Frame 4 (X=${tileSize*3} to X=${tileSize*4-1})
 
-ALIGNMENT REQUIREMENTS:
+ALIGNMENT REQUIREMENTS - CRITICAL FOR GROUND POSITIONING:
+HORIZONTAL ALIGNMENT:
 - Every sprite must be PIXEL-PERFECTLY CENTERED horizontally within its ${tileSize}x${tileSize} cell.
-- Every sprite must have the SAME vertical baseline (feet at the same Y-level in every cell).
-- Character height: Approximately ${Math.round(tileSize * 0.625)}-${Math.round(tileSize * 0.78125)} pixels within each ${tileSize}px cell.
+- The dog's center should align with the horizontal center of each cell (at X=${Math.floor(tileSize/2)} within each cell).
+
+VERTICAL ALIGNMENT (CRITICAL - DO NOT CENTER VERTICALLY):
+- The dog's FEET must be positioned at the BOTTOM EDGE of each ${tileSize}x${tileSize} cell.
+- Within each cell, the bottom edge is at Y=${tileSize-1} (relative to that cell's top-left corner at Y=0).
+- The dog should NOT be centered vertically - it must be positioned so its feet touch the bottom of the cell.
+- Every sprite must have the SAME vertical baseline (feet at the same Y-level relative to each cell's bottom edge).
+- Character height: Approximately ${Math.round(tileSize * 0.625)}-${Math.round(tileSize * 0.78125)} pixels tall.
+- The dog's body should extend UPWARD from the bottom of the cell, leaving empty space at the TOP of each cell.
+- This ensures the dog appears to stand on the ground, not float in the air.
+
+SUMMARY: Horizontally CENTERED, Vertically at BOTTOM (feet touching bottom edge).
 
 CRITICAL CONSTRAINTS:
 - BACKGROUND: Solid, uniform lime green (#00ff00) background ONLY. NO transparency, NO other colors.
@@ -402,31 +510,37 @@ FINAL SIZE REMINDER - CRITICAL:
             console.log('🎨 Generating sprite sheet with analysis-based prompt');
             console.log('📋 Prompt length:', spritePrompt.length, 'characters');
             console.log('📋 Prompt preview (first 500 chars):', spritePrompt.substring(0, 500));
+            
+            // Verify the analysis section is in the prompt
+            if (!spritePrompt.includes('CHARACTER DESCRIPTION (from image analysis):')) {
+                console.error('⚠️ ERROR: Prompt template is missing the analysis section!');
+            } else {
+                // Extract the analysis from the prompt to verify it's there
+                const analysisMatch = spritePrompt.match(/CHARACTER DESCRIPTION \(from image analysis\):\s*\n([\s\S]*?)\nSTYLE:/);
+                if (analysisMatch && analysisMatch[1]) {
+                    const extractedAnalysis = analysisMatch[1].trim();
+                    console.log('✅ Verified: Analysis found in prompt, length:', extractedAnalysis.length, 'characters');
+                    console.log('📝 Analysis in prompt (first 100 chars):', extractedAnalysis.substring(0, 100));
+                } else {
+                    console.warn('⚠️ WARNING: Could not extract analysis from prompt - it may be empty or malformed');
+                }
+            }
 
             // Step 2: Generate Image
-            // Note: Gemini 2.0 Flash Exp supports image generation in the same manner
-            const response = await fetch(
-                `${CONFIG.GEMINI_IMAGE_GEN_URL}?key=${this.apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [{ text: spritePrompt }]
-                        }],
-                        // Requesting image result - this structure depends on the specific model version
-                        // For experimental models, sometimes we just ask in text. 
-                        // However, standard Imagen on Vertex/Gemini usually returns base64 in a specific field.
-                        // Let's assume standard generateContent response with inline data if the model supports it.
-                        generationConfig: {
-                            temperature: 0.2,
-                            topK: 16,
-                            topP: 0.9,
-                            maxOutputTokens: 8192,
-                        }
-                    })
+            const model = DEBUG_MODE ? 'gemini-2.5-flash-image' : 'gemini-3-pro-image-preview';
+            const requestBody = {
+                contents: [{
+                    parts: [{ text: spritePrompt }]
+                }],
+                generationConfig: {
+                    temperature: 0.2,
+                    topK: 16,
+                    topP: 0.9,
+                    maxOutputTokens: 8192,
                 }
-            );
+            };
+            
+            const response = await this.makeApiRequest(model, requestBody);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -527,24 +641,20 @@ CRITICAL CONSTRAINTS:
 - The image MUST be exactly ${spriteSheetSize}x${spriteSheetSize} pixels. If you cannot create this exact size, DO NOT generate the image.
 - ALL 16 frames MUST be present. Missing frames will cause the game to break.`;
 
-            const response = await fetch(
-                `${CONFIG.GEMINI_IMAGE_GEN_URL}?key=${this.apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [{ text: enemyPrompt }]
-                        }],
-                        generationConfig: {
-                            temperature: 0.3,
-                            topK: 16,
-                            topP: 0.9,
-                            maxOutputTokens: 8192,
-                        }
-                    })
+            const model = DEBUG_MODE ? 'gemini-2.5-flash-image' : 'gemini-3-pro-image-preview';
+            const requestBody = {
+                contents: [{
+                    parts: [{ text: enemyPrompt }]
+                }],
+                generationConfig: {
+                    temperature: 0.3,
+                    topK: 16,
+                    topP: 0.9,
+                    maxOutputTokens: 8192,
                 }
-            );
+            };
+            
+            const response = await this.makeApiRequest(model, requestBody);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -1102,22 +1212,18 @@ STRICT REALISM REQUIREMENT - NO FANTASY ELEMENTS:
 
 Do not include any text or signs. Description should be vivid for a 16-bit SNES style pixel art aesthetic.`;
 
-            const response = await fetch(
-                `${CONFIG.GEMINI_API_URL}?key=${this.apiKey}`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [{ text: prompt }]
-                        }],
-                        generationConfig: {
-                            temperature: 0.7,
-                            maxOutputTokens: 1024,
-                        }
-                    })
+            const model = DEBUG_MODE ? 'gemini-2.5-flash' : 'gemini-3-pro-image-preview';
+            const requestBody = {
+                contents: [{
+                    parts: [{ text: prompt }]
+                }],
+                generationConfig: {
+                    temperature: 0.7,
+                    maxOutputTokens: 1024,
                 }
-            );
+            };
+            
+            const response = await this.makeApiRequest(model, requestBody);
 
             if (!response.ok) {
                 const errorText = await response.text();
@@ -1389,25 +1495,21 @@ Generate frame ${frameNum} of an ${totalFrames}-frame SEAMLESS animation loop.
             });
         }
         
-        const response = await fetch(
-            `${CONFIG.GEMINI_IMAGE_GEN_URL}?key=${this.apiKey}`,
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{
-                        parts: parts
-                    }],
-                    generationConfig: {
-                        temperature: 0.05,
-                        topK: 8,
-                        topP: 0.8,
-                        maxOutputTokens: 8192,
-                        ...(seed !== null && { seed: seed })
-                    }
-                })
+        const model = DEBUG_MODE ? 'gemini-2.5-flash-image' : 'gemini-3-pro-image-preview';
+        const requestBody = {
+            contents: [{
+                parts: parts
+            }],
+            generationConfig: {
+                temperature: 0.05,
+                topK: 8,
+                topP: 0.8,
+                maxOutputTokens: 8192,
+                ...(seed !== null && { seed: seed })
             }
-        );
+        };
+        
+        const response = await this.makeApiRequest(model, requestBody);
 
         if (!response.ok) {
             const errorText = await response.text();
