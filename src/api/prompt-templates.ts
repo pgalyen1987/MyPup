@@ -145,18 +145,14 @@ You are generating ${totalFrames} separate images for an animated background.
     backgroundPrompt(location: LocationData, timeWeather: TimeWeather): string {
         const weatherDesc = timeWeather.weatherReport?.description || 'clear sky';
 
-        return `Describe a beautiful landscape scene for a 16-bit platformer background:
+        // Simplified prompt - less demanding on the model
+        return `Write a brief 2-3 sentence description of a 16-bit SNES-style pixel art landscape for a platformer game.
 
-Location: ${location.city}, ${location.region}, ${location.country}
-Time: ${timeWeather.timeString} (${timeWeather.timeOfDay})
-Season: ${timeWeather.season}
-Weather: ${weatherDesc}
+    Setting: ${location.city}, ${timeWeather.season}, ${timeWeather.timeOfDay}, ${weatherDesc}.
 
-Include recognizable landmarks from ${location.city}.
-Must tile horizontally seamlessly.
-No fantasy elements - real-world features only.
-No text or signs.
-16-bit SNES pixel art aesthetic.`;
+    Include: Local landmarks or typical scenery. Must tile horizontally.
+    Style: 16-bit SNES pixel art, vibrant colors.
+    No fantasy elements, no text.`;
     },
 
     framePrompt(

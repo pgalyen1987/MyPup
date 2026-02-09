@@ -15,6 +15,12 @@ import { CacheService } from './cache-service.js';
 export class APIService {
     private locationService = new LocationWeatherService();
     private cache = new CacheService();
+    private pendingRequests: Map<string, Promise<any>> = new Map();
+
+    // Expected sprite sheet dimensions
+    private get expectedSpriteSheetSize(): number {
+        return CONFIG.TILE_SIZE * 4; // 4x4 grid
+    }
 
     // -------------------------------------------------------------------------
     // Configuration Getters
@@ -57,10 +63,18 @@ export class APIService {
     }
 
     private getModel(forImage: boolean = false): string {
-        if (forImage) {
-            return this.debugMode ? 'gemini-2.5-flash-image' : 'gemini-3-pro-image-preview';
+        if (this.debugMode) {
+            // Debug mode: Use gemini-2.0-flash for both text and image
+            // gemini-2.0-flash-exp supports image generation
+            return forImage
+                ? 'gemini-2.5-flash-image'  // Supports image generation
+                : 'gemini-2.5-flash';      // Text only
         }
-        return this.debugMode ? 'gemini-2.5-flash' : 'gemini-3-pro-image-preview';
+
+        // Production mode
+        return forImage
+            ? 'gemini-3-pro-image-preview'  // Or your production image model
+            : 'gemini-3-pro-preview';
     }
 
     private async extractImageFromResponse(data: any, context: string): Promise<string> {
@@ -136,50 +150,56 @@ export class APIService {
         }
 
         const rawBase64 = await this.extractImageFromResponse(await response.json(), 'sprite sheet');
-        return BackgroundRemover.remove(rawBase64);
+
+        // Remove green background
+        const transparentBase64 = await BackgroundRemover.remove(rawBase64);
+
+        // CRITICAL: Resize to exact game dimensions BEFORE returning
+        // 4x4 grid of 64x64 tiles = 256x256
+        const expectedSize = CONFIG.TILE_SIZE * CONFIG.SPRITE_SHEET_WIDTH; // 64 * 4 = 256
+        const resized = await ImageUtils.resizeToExact(transparentBase64, expectedSize, expectedSize);
+
+        console.log(`✓ Sprite sheet resized to ${expectedSize}x${expectedSize} (${CONFIG.TILE_SIZE}px frames)`);
+
+        return resized;
     }
 
     async generateEnemySpriteSheet(enemyType: string = 'cat'): Promise<string> {
-        console.log(`Generating ${enemyType} enemy spritesheet...`);
+        const requestKey = `enemySprite_${enemyType}`;
 
-        const prompt = PromptTemplates.enemySpriteSheet(enemyType, CONFIG.TILE_SIZE);
-
-        const response = await this.makeApiRequest(this.getModel(true), {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.3, topK: 16, topP: 0.9, maxOutputTokens: 8192 }
-        });
-
-        if (!response.ok) {
-            throw ErrorParser.parse(await response.text(), response.status);
+        const pending = this.pendingRequests.get(requestKey);
+        if (pending) {
+            console.log(`${enemyType} sprite generation already in progress, returning existing promise`);
+            return pending;
         }
 
-        const rawBase64 = await this.extractImageFromResponse(await response.json(), `${enemyType} sprite`);
-        const processed = await BackgroundRemover.remove(rawBase64);
+        const promise = this._doGenerateEnemySpriteSheet(enemyType);
+        this.pendingRequests.set(requestKey, promise);
 
-        this.cache.cacheEnemySprite(enemyType, processed);
-
-        console.log(`${enemyType} spritesheet generated successfully`);
-        return processed;
+        try {
+            return await promise;
+        } finally {
+            this.pendingRequests.delete(requestKey);
+        }
     }
 
     async generateLocationBackground(progressCallback?: ProgressCallback): Promise<BackgroundData> {
-        console.log('Generating location-based background...');
+        const requestKey = 'locationBackground';
 
-        const location = await this.locationService.getUserLocation();
-        console.log('Location:', location.city, location.country);
+        const pending = this.pendingRequests.get(requestKey);
+        if (pending) {
+            console.log('Background generation already in progress, returning existing promise');
+            return pending;
+        }
 
-        const timeWeather = await this.locationService.getTimeAndWeather(location);
-        console.log('Time/Weather:', timeWeather.timeOfDay, timeWeather.weatherReport.description);
+        const promise = this._doGenerateLocationBackground(progressCallback);
+        this.pendingRequests.set(requestKey, promise);
 
-        const descriptionPrompt = PromptTemplates.backgroundPrompt(location, timeWeather);
-        const description = await this._generateBackgroundDescription(descriptionPrompt);
-        console.log('Background description generated');
-
-        const backgroundData = await this._generateBackgroundFrames(description, timeWeather, progressCallback);
-
-        this.cache.cacheBackground(backgroundData, location, timeWeather, description);
-
-        return backgroundData;
+        try {
+            return await promise;
+        } finally {
+            this.pendingRequests.delete(requestKey);
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -227,8 +247,60 @@ export class APIService {
     }
 
     // -------------------------------------------------------------------------
-    // Private Helper Methods
+    // Private Implementation Methods
     // -------------------------------------------------------------------------
+
+    private async _doGenerateEnemySpriteSheet(enemyType: string): Promise<string> {
+        console.log(`Generating ${enemyType} enemy spritesheet...`);
+
+        const prompt = PromptTemplates.enemySpriteSheet(enemyType, CONFIG.TILE_SIZE);
+
+        const response = await this.makeApiRequest(this.getModel(true), {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.3, topK: 16, topP: 0.9, maxOutputTokens: 8192 }
+        });
+
+        if (!response.ok) {
+            throw ErrorParser.parse(await response.text(), response.status);
+        }
+
+        const rawBase64 = await this.extractImageFromResponse(await response.json(), `${enemyType} sprite`);
+
+        // Remove green background
+        const transparentBase64 = await BackgroundRemover.remove(rawBase64);
+
+        // CRITICAL: Resize to exact game dimensions BEFORE returning
+        const expectedSize = CONFIG.TILE_SIZE * CONFIG.SPRITE_SHEET_WIDTH; // 64 * 4 = 256
+        const processed = await ImageUtils.resizeToExact(transparentBase64, expectedSize, expectedSize);
+
+        console.log(`✓ ${enemyType} sprite resized to ${expectedSize}x${expectedSize}`);
+
+        // Cache will compress further if needed, but game gets correct size
+        await this.cache.cacheEnemySprite(enemyType, processed);
+
+        console.log(`${enemyType} spritesheet generated successfully`);
+        return processed;
+    }
+
+    private async _doGenerateLocationBackground(progressCallback?: ProgressCallback): Promise<BackgroundData> {
+        console.log('Generating location-based background...');
+
+        const location = await this.locationService.getUserLocation();
+        console.log('Location:', location.city, location.country);
+
+        const timeWeather = await this.locationService.getTimeAndWeather(location);
+        console.log('Time/Weather:', timeWeather.timeOfDay, timeWeather.weatherReport.description);
+
+        const descriptionPrompt = PromptTemplates.backgroundPrompt(location, timeWeather);
+        const description = await this._generateBackgroundDescription(descriptionPrompt);
+        console.log('Background description generated');
+
+        const backgroundData = await this._generateBackgroundFrames(description, timeWeather, progressCallback);
+
+        await this.cache.cacheBackground(backgroundData, location, timeWeather, description);
+
+        return backgroundData;
+    }
 
     private async _analyzeDogImage(imageBase64: string): Promise<string> {
         const { data, mimeType } = ImageUtils.extractBase64Data(imageBase64);
@@ -240,7 +312,7 @@ export class APIService {
                     { inline_data: { mime_type: mimeType, data } }
                 ]
             }],
-            generationConfig: { temperature: 0.4, maxOutputTokens: 1024 }
+            generationConfig: { temperature: 0.4, maxOutputTokens: 2048 }
         });
 
         if (!response.ok) {
@@ -270,7 +342,10 @@ export class APIService {
 
         const response = await this.makeApiRequest(this.getModel(), {
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+            generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 2048
+            }
         });
 
         if (!response.ok) {
@@ -280,24 +355,31 @@ export class APIService {
         }
 
         const data = await response.json();
-
-        // Debug logging
-        console.log('Background description response:', JSON.stringify(data, null, 2).substring(0, 500));
+        console.log('Background description response received');
 
         const candidate = data.candidates?.[0];
 
         if (!candidate) {
-            console.error('No candidates in response:', data);
+            console.error('No candidates in response:', JSON.stringify(data).substring(0, 500));
             throw new Error('No candidates returned for background description');
         }
 
-        // Check for safety block
         if (candidate.finishReason === 'SAFETY') {
             console.warn('Background description blocked by safety filter, using fallback');
-            return 'A realistic SNES-era pixel art landscape with rolling hills, trees, and a clear sky. Real-world natural scenery.';
+            return this._getFallbackBackgroundDescription();
         }
 
-        // Check for other non-STOP finish reasons
+        if (candidate.finishReason === 'MAX_TOKENS') {
+            console.warn('Background description hit token limit');
+            const partialText = candidate.content?.parts?.[0]?.text;
+            if (partialText && partialText.length > 50) {
+                console.log('Using partial response:', partialText.substring(0, 100) + '...');
+                return partialText.replace(/```/g, '').trim();
+            }
+            console.warn('No usable partial content, using fallback');
+            return this._getFallbackBackgroundDescription();
+        }
+
         if (candidate.finishReason && candidate.finishReason !== 'STOP') {
             console.warn(`Unexpected finish reason: ${candidate.finishReason}`);
         }
@@ -305,14 +387,24 @@ export class APIService {
         const text = candidate.content?.parts?.[0]?.text;
 
         if (!text) {
-            console.error('No text in candidate:', candidate);
-            // Return fallback instead of throwing
-            console.warn('Using fallback background description');
-            return 'A realistic SNES-era pixel art landscape with natural scenery, trees, and sky appropriate for a platformer game.';
+            console.warn('No text in candidate, using fallback');
+            return this._getFallbackBackgroundDescription();
         }
 
         console.log('Background description generated:', text.substring(0, 100) + '...');
         return text.replace(/```/g, '').trim();
+    }
+
+    private _getFallbackBackgroundDescription(): string {
+        const fallbacks = [
+            'A realistic SNES-era pixel art landscape of rolling green hills with scattered oak trees, a winding dirt path, blue sky with fluffy white clouds, and distant mountains. Natural parkland scenery suitable for a side-scrolling platformer game.',
+            'A 16-bit pixel art suburban neighborhood scene with houses, white picket fences, green lawns, sidewalks, trees, and a clear blue sky. American residential area in the style of classic SNES games.',
+            'A retro pixel art city park with walking paths, benches, lamp posts, large trees, flower beds, and a fountain. Urban green space with buildings visible in the background, 16-bit SNES aesthetic.',
+        ];
+
+        const selected = fallbacks[Math.floor(Math.random() * fallbacks.length)];
+        console.log('Using fallback description:', selected.substring(0, 50) + '...');
+        return selected;
     }
 
     private async _generateBackgroundFrames(
@@ -406,7 +498,6 @@ export class APIService {
 
 export const apiService = new APIService();
 
-// Re-export types for convenience
 export type {
     ApiError,
     BackgroundData,

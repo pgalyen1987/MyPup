@@ -64,6 +64,8 @@ export interface EnemySpriteMeta {
     timestamp: number;
     type: string;
     version: number;
+    compressed?: boolean;
 }
 
 export type ProgressCallback = (current: number, total: number) => void;
+

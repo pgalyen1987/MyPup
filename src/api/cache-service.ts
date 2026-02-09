@@ -4,6 +4,7 @@
 
 import { BackgroundData, BackgroundMeta, EnemySpriteMeta, LocationData, TimeWeather } from './types.js';
 import { API_CONSTANTS } from './constants.js';
+import { ImageUtils } from './image-utils.js';
 
 export class CacheService {
     private readonly KEYS = {
@@ -18,27 +19,38 @@ export class CacheService {
     // Background Caching
     // -------------------------------------------------------------------------
 
-    cacheBackground(
+    async cacheBackground(
         backgroundData: BackgroundData,
         location: LocationData,
         timeWeather: TimeWeather,
         prompt: string
-    ): boolean {
+    ): Promise<boolean> {
         try {
             this._clearOldBackgroundCache();
 
-            const framesJson = JSON.stringify(backgroundData.frames);
+            // Compress frames before caching
+            console.log('Compressing background frames for cache...');
+            const compressedFrames: string[] = [];
+
+            for (const frame of backgroundData.frames) {
+                const compressed = await ImageUtils.compressBackgroundForCache(frame);
+                compressedFrames.push(compressed);
+            }
+
+            const framesJson = JSON.stringify(compressedFrames);
             const estimatedSize = framesJson.length * 2;
 
+            console.log(`Compressed background size: ${ImageUtils.formatBytes(estimatedSize)}`);
+
             if (estimatedSize > API_CONSTANTS.CACHE.MAX_SIZE) {
-                console.warn(`Background frames too large to cache: ${(estimatedSize / 1024 / 1024).toFixed(2)}MB`);
+                console.warn(`Background still too large after compression: ${ImageUtils.formatBytes(estimatedSize)}`);
                 this._saveBackgroundMeta(location, timeWeather, prompt, backgroundData, false);
                 return false;
             }
 
             localStorage.setItem(this.KEYS.BACKGROUND_FRAMES, framesJson);
             this._saveBackgroundMeta(location, timeWeather, prompt, backgroundData, true);
-            console.log('Background cached successfully');
+            console.log('✓ Background cached successfully');
             return true;
         } catch (error) {
             console.warn('Could not cache background:', error);
@@ -64,8 +76,8 @@ export class CacheService {
                 data: {
                     frames,
                     frameCount: meta.frameCount || frames.length,
-                    frameWidth: meta.frameWidth || 1024,
-                    frameHeight: meta.frameHeight || 1024,
+                    frameWidth: meta.frameWidth || 512,  // Cached frames are 512
+                    frameHeight: meta.frameHeight || 512,
                 },
                 meta
             };
@@ -113,32 +125,45 @@ export class CacheService {
     // -------------------------------------------------------------------------
     // Enemy Sprite Caching
     // -------------------------------------------------------------------------
+// cache-service.ts
 
-    cacheEnemySprite(enemyType: string, spriteData: string): boolean {
-        const cacheKey = this._getEnemyCacheKey(enemyType);
+async cacheEnemySprite(enemyType: string, spriteData: string): Promise<boolean> {
+    const cacheKey = this._getEnemyCacheKey(enemyType);
 
-        try {
-            const estimatedSize = spriteData.length * 2;
+    try {
+        // Sprite should already be 256x256, just store it
+        // Only compress if it's too large
+        const estimatedSize = spriteData.length * 2;
 
-            if (estimatedSize > API_CONSTANTS.CACHE.MAX_SPRITE_SIZE) {
-                console.warn(`${enemyType} sprite too large to cache: ${(estimatedSize / 1024 / 1024).toFixed(2)}MB`);
-                return false;
-            }
+        console.log(`${enemyType} sprite size before cache: ${ImageUtils.formatBytes(estimatedSize)}`);
 
-            localStorage.setItem(cacheKey, spriteData);
-            localStorage.setItem(`${cacheKey}${this.KEYS.META_SUFFIX}`, JSON.stringify({
-                timestamp: Date.now(),
-                type: enemyType,
-                version: 1
-            } as EnemySpriteMeta));
+        let dataToStore = spriteData;
 
-            console.log(`✓ Cached ${enemyType} sprite to localStorage`);
-            return true;
-        } catch (error) {
-            console.warn(`Could not cache ${enemyType} sprite:`, error);
+        if (estimatedSize > API_CONSTANTS.CACHE.MAX_SPRITE_SIZE) {
+            console.log(`Compressing ${enemyType} sprite for cache...`);
+            dataToStore = await ImageUtils.compressSpriteForCache(spriteData);
+            console.log(`Compressed ${enemyType} sprite size: ${ImageUtils.formatBytes(dataToStore.length * 2)}`);
+        }
+
+        if (dataToStore.length * 2 > API_CONSTANTS.CACHE.MAX_SPRITE_SIZE) {
+            console.warn(`${enemyType} sprite still too large after compression`);
             return false;
         }
+
+        localStorage.setItem(cacheKey, dataToStore);
+        localStorage.setItem(`${cacheKey}${this.KEYS.META_SUFFIX}`, JSON.stringify({
+            timestamp: Date.now(),
+            type: enemyType,
+            version: 1,
+        }));
+
+        console.log(`✓ Cached ${enemyType} sprite to localStorage`);
+        return true;
+    } catch (error) {
+        console.warn(`Could not cache ${enemyType} sprite:`, error);
+        return false;
     }
+}
 
     getCachedEnemySprite(enemyType: string): string | null {
         const cacheKey = this._getEnemyCacheKey(enemyType);
