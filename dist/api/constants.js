@@ -1,0 +1,29 @@
+export const API_CONSTANTS = {
+    COLOR: {
+        GREEN_MIN_VALUE: 80,
+        GREEN_DOMINANT_MULTIPLIER: 1.2,
+        BRIGHT_GREEN_MIN: 180,
+        BRIGHT_GREEN_MAX_RB: 100,
+        PURE_GREEN_MIN: 240,
+        PURE_GREEN_MAX_RB: 50,
+        BACKGROUND_TOLERANCE: 80,
+        BRIGHTNESS_SUM_THRESHOLD: 250,
+        VERY_BRIGHT_THRESHOLD: 500,
+    },
+    VALIDATION: {
+        BLACK_PIXEL_THRESHOLD: 10,
+        BLACK_PERCENT_WARNING: 95,
+        LOW_BRIGHTNESS_WARNING: 5,
+        MIN_BASE64_LENGTH: 1000,
+    },
+    ANIMATION: {
+        TOTAL_FRAMES: 8,
+        FPS: 2,
+    },
+    EDGE_SAMPLES: 10,
+    CACHE: {
+        MAX_SIZE: 4 * 1024 * 1024,
+        MAX_SPRITE_SIZE: 1 * 1024 * 1024,
+        VERSION: 5,
+    },
+};
