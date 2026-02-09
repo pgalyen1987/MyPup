@@ -45,6 +45,10 @@ export class Enemy {
     private isDestroyed: boolean = false;
     private lastAnimKey: string = '';
 
+    // Track active timers and tweens for cleanup
+    private hurtTimer: any = null;
+    private deathTween: any = null;
+
     constructor(
         scene: PhaserScene,
         x: number,
@@ -57,7 +61,28 @@ export class Enemy {
         this.config = config;
         this.health = config.health;
 
+        // Listen for scene shutdown
+        this.scene.events?.once('shutdown', this.onSceneShutdown, this);
+        this.scene.events?.once('destroy', this.onSceneShutdown, this);
+
         this.createSprite(x, y);
+    }
+
+    // ==================================================================================
+    // SCENE LIFECYCLE
+    // ==================================================================================
+
+    private onSceneShutdown(): void {
+        this.destroy();
+    }
+
+    private isSceneActive(): boolean {
+        return (
+            this.scene &&
+            this.scene.sys &&
+            this.scene.sys.isActive() &&
+            !this.scene.sys.isTransitioning()
+        );
     }
 
     // ==================================================================================
@@ -65,6 +90,11 @@ export class Enemy {
     // ==================================================================================
 
     private createSprite(x: number, y: number): void {
+        if (!this.isSceneActive()) {
+            console.error('Scene is not active - cannot create enemy');
+            return;
+        }
+
         // Check if texture exists
         if (!this.scene.textures.exists(this.type)) {
             console.error(`Texture ${this.type} not found - cannot create enemy`);
@@ -134,6 +164,7 @@ export class Enemy {
 
     public update(player: PhaserSprite | null): void {
         if (this.isDestroyed || !this.sprite || !this.sprite.active) return;
+        if (!this.isSceneActive()) return;
         if (this.state === 'dead' || this.state === 'hurt') return;
 
         // Execute behavior based on type
@@ -154,7 +185,7 @@ export class Enemy {
     }
 
     private behaviorPatrol(): void {
-        if (!this.sprite) return;
+        if (!this.sprite || !this.isSceneActive()) return;
 
         // Move in current direction
         this.sprite.setVelocityX(this.config.speed * this.direction);
@@ -182,7 +213,7 @@ export class Enemy {
     }
 
     private behaviorFly(): void {
-        if (!this.sprite) return;
+        if (!this.sprite || !this.isSceneActive()) return;
 
         // Horizontal movement
         this.sprite.setVelocityX(this.config.speed * this.direction);
@@ -205,10 +236,12 @@ export class Enemy {
     }
 
     private behaviorChase(player: PhaserSprite | null): void {
-        if (!this.sprite || !player) {
+        if (!this.sprite || !player || !player.active) {
             this.behaviorPatrol();
             return;
         }
+
+        if (!this.isSceneActive()) return;
 
         const distance = Phaser.Math.Distance.Between(
             this.sprite.x,
@@ -235,13 +268,12 @@ export class Enemy {
 
     private updateSpriteDirection(): void {
         if (!this.sprite) return;
-
-        // Use the walk_left / walk_right animations based on direction
-        // The sprite itself doesn't need to flip since we have separate left/right animations
+        // Direction is handled by walk_left/walk_right animations
     }
 
     private playAnimation(anim: 'idle' | 'walk' | 'attack'): void {
         if (!this.sprite || !this.sprite.anims) return;
+        if (!this.isSceneActive()) return;
 
         let animKey: string;
 
@@ -254,7 +286,7 @@ export class Enemy {
 
         // Only change animation if it's different
         if (animKey !== this.lastAnimKey) {
-            if (this.scene.anims.exists(animKey)) {
+            if (this.scene.anims?.exists(animKey)) {
                 this.sprite.play(animKey, true);
                 this.lastAnimKey = animKey;
             }
@@ -267,6 +299,7 @@ export class Enemy {
 
     public takeDamage(amount: number): void {
         if (this.isDestroyed || this.state === 'dead') return;
+        if (!this.isSceneActive()) return;
 
         this.health -= amount;
 
@@ -280,8 +313,15 @@ export class Enemy {
                 this.sprite.setTint(0xff0000);
                 this.sprite.setVelocityX(0);
 
-                this.scene.time.delayedCall(200, () => {
-                    if (this.sprite && !this.isDestroyed) {
+                // Clear any existing hurt timer
+                if (this.hurtTimer) {
+                    this.hurtTimer.remove();
+                    this.hurtTimer = null;
+                }
+
+                this.hurtTimer = this.scene.time.delayedCall(200, () => {
+                    this.hurtTimer = null;
+                    if (this.sprite && !this.isDestroyed && this.isSceneActive()) {
                         this.sprite.clearTint();
                         this.state = 'walking';
                     }
@@ -299,10 +339,17 @@ export class Enemy {
         this.sprite.setVelocity(0, 0);
         if (this.sprite.body) {
             this.sprite.body.setAllowGravity(false);
+            this.sprite.body.enable = false; // Disable physics body
+        }
+
+        // If scene is shutting down, just destroy immediately
+        if (!this.isSceneActive()) {
+            this.destroy();
+            return;
         }
 
         // Death animation
-        this.scene.tweens.add({
+        this.deathTween = this.scene.tweens.add({
             targets: this.sprite,
             alpha: 0,
             y: this.sprite.y - 50,
@@ -312,6 +359,7 @@ export class Enemy {
             duration: 400,
             ease: 'Power2',
             onComplete: () => {
+                this.deathTween = null;
                 this.destroy();
             },
         });
@@ -330,11 +378,34 @@ export class Enemy {
     }
 
     public destroy(): void {
+        if (this.isDestroyed) return;
         this.isDestroyed = true;
 
+        // Remove scene event listeners
+        if (this.scene?.events) {
+            this.scene.events.off('shutdown', this.onSceneShutdown, this);
+            this.scene.events.off('destroy', this.onSceneShutdown, this);
+        }
+
+        // Clean up hurt timer
+        if (this.hurtTimer) {
+            this.hurtTimer.remove();
+            this.hurtTimer = null;
+        }
+
+        // Clean up death tween
+        if (this.deathTween) {
+            this.deathTween.stop();
+            this.deathTween = null;
+        }
+
+        // Destroy sprite
         if (this.sprite) {
             this.sprite.destroy();
             this.sprite = null;
         }
+
+        // Clear scene reference
+        this.scene = null;
     }
 }

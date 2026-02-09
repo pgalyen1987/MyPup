@@ -11,6 +11,8 @@ declare const Phaser: any;
 
 type PhaserScene = any;
 type PhaserSprite = any;
+type PhaserGroup = any;
+type PhaserCollider = any;
 
 // ============================================================================
 // ENEMY CONFIGURATIONS
@@ -72,7 +74,22 @@ export class EnemyManager {
     private apiService: APIService;
     private enemies: Enemy[] = [];
     private player: PhaserSprite | null = null;
-    private loadedTextures: Set<string> = new Set();
+    private platforms: PhaserGroup | null = null;
+
+    // Track loaded textures globally (shared across scene instances)
+    private static globalLoadedTextures: Set<string> = new Set();
+
+    // Track colliders for cleanup
+    private colliders: PhaserCollider[] = [];
+
+    // Track pending image loads for cancellation
+    private pendingLoads: Map<string, { cancelled: boolean }> = new Map();
+
+    // Track created animations for this manager instance
+    private createdAnimations: string[] = [];
+
+    // Flag to prevent operations after destruction
+    private isDestroyed: boolean = false;
 
     private callbacks: {
         onEnemyKilled?: (enemy: Enemy, player: PhaserSprite) => void;
@@ -82,6 +99,92 @@ export class EnemyManager {
     constructor(scene: PhaserScene, apiService: APIService) {
         this.scene = scene;
         this.apiService = apiService;
+
+        // Listen for scene lifecycle events
+        this.scene.events.once('shutdown', this.handleSceneShutdown, this);
+        this.scene.events.once('destroy', this.handleSceneDestroy, this);
+    }
+
+    // ==================================================================================
+    // SCENE LIFECYCLE HANDLERS
+    // ==================================================================================
+
+    private handleSceneShutdown(): void {
+        console.log('EnemyManager: Scene shutting down, cleaning up...');
+        this.cleanup(false); // Don't clear global textures on shutdown (scene restart)
+    }
+
+    private handleSceneDestroy(): void {
+        console.log('EnemyManager: Scene destroying, full cleanup...');
+        this.cleanup(true); // Full cleanup including textures
+    }
+
+    private cleanup(clearTextures: boolean): void {
+        this.isDestroyed = true;
+
+        // Cancel all pending image loads
+        this.pendingLoads.forEach((loadState, type) => {
+            loadState.cancelled = true;
+            console.log(`Cancelled pending load for ${type}`);
+        });
+        this.pendingLoads.clear();
+
+        // Destroy all enemies
+        this.clearAll();
+
+        // Remove all physics colliders
+        this.removeAllColliders();
+
+        // Clear callbacks to prevent stale references
+        this.callbacks = {};
+
+        // Optionally clear animations (they're global in Phaser)
+        if (clearTextures) {
+            this.removeCreatedAnimations();
+            EnemyManager.globalLoadedTextures.clear();
+        }
+
+        // Clear references
+        this.platforms = null;
+        this.player = null;
+
+        // Remove event listeners
+        if (this.scene && this.scene.events) {
+            this.scene.events.off('shutdown', this.handleSceneShutdown, this);
+            this.scene.events.off('destroy', this.handleSceneDestroy, this);
+        }
+    }
+
+    private removeAllColliders(): void {
+        for (const collider of this.colliders) {
+            if (collider && collider.destroy) {
+                collider.destroy();
+            }
+        }
+        this.colliders = [];
+    }
+
+    private removeCreatedAnimations(): void {
+        for (const animKey of this.createdAnimations) {
+            if (this.scene?.anims?.exists(animKey)) {
+                this.scene.anims.remove(animKey);
+            }
+        }
+        this.createdAnimations = [];
+    }
+
+    // ==================================================================================
+    // UTILITY METHODS
+    // ==================================================================================
+
+    private isSceneActive(): boolean {
+        return (
+            !this.isDestroyed &&
+            this.scene &&
+            this.scene.sys &&
+            this.scene.sys.isActive() &&
+            !this.scene.sys.isTransitioning()
+        );
     }
 
     // ==================================================================================
@@ -92,61 +195,107 @@ export class EnemyManager {
         onEnemyKilled?: (enemy: Enemy, player: PhaserSprite) => void;
         onPlayerHit?: (enemy: Enemy, player: PhaserSprite) => void;
     }): void {
+        if (this.isDestroyed) return;
         this.callbacks = callbacks;
     }
 
     public setPlayer(player: PhaserSprite): void {
+        if (this.isDestroyed) return;
         this.player = player;
-        this.setupCollisions();
+        this.setupPlayerCollisions();
     }
 
-    private setupCollisions(): void {
-        if (!this.player) return;
+    public setPlatforms(platforms: PhaserGroup): void {
+        if (this.isDestroyed) return;
+        this.platforms = platforms;
+        this.setupPlatformCollisions();
+    }
+
+    private setupPlayerCollisions(): void {
+        if (!this.player || this.isDestroyed) return;
 
         for (const enemy of this.enemies) {
-            if (enemy.sprite) {
-                this.scene.physics.add.overlap(
+            if (enemy.sprite && enemy.isActive()) {
+                const collider = this.scene.physics.add.overlap(
                     this.player,
                     enemy.sprite,
                     () => this.handlePlayerEnemyCollision(enemy),
                     undefined,
                     this
                 );
+                this.colliders.push(collider);
+            }
+        }
+    }
+
+    private setupPlatformCollisions(): void {
+        if (!this.platforms || this.isDestroyed) return;
+
+        for (const enemy of this.enemies) {
+            if (enemy.sprite && enemy.isActive()) {
+                const collider = this.scene.physics.add.collider(enemy.sprite, this.platforms);
+                this.colliders.push(collider);
             }
         }
     }
 
     public async preloadSprites(level: number, waitForAll: boolean = true): Promise<void> {
+        if (this.isDestroyed) return;
+
         const enemyTypes = LEVEL_ENEMIES[level] || LEVEL_ENEMIES[1];
         console.log(`EnemyManager: Loading sprites for types: ${enemyTypes.join(', ')}`);
 
         const loadPromises: Promise<void>[] = [];
 
         for (const type of enemyTypes) {
-            if (!this.loadedTextures.has(type) && !this.scene.textures.exists(type)) {
-                loadPromises.push(this.loadEnemySprite(type));
+            // Check both global cache and scene texture manager
+            const textureExists = this.scene.textures.exists(type);
+            const inGlobalCache = EnemyManager.globalLoadedTextures.has(type);
+
+            if (!textureExists) {
+                if (inGlobalCache) {
+                    // Texture was loaded before but scene doesn't have it
+                    // Try to reload from localStorage cache
+                    loadPromises.push(this.loadEnemySprite(type));
+                } else {
+                    // Never loaded, fetch from API
+                    loadPromises.push(this.loadEnemySprite(type));
+                }
             } else {
-                this.loadedTextures.add(type);
+                // Texture exists in scene, ensure animations are created
+                EnemyManager.globalLoadedTextures.add(type);
+                this.createEnemyAnimations(type);
             }
         }
 
         if (waitForAll && loadPromises.length > 0) {
-            await Promise.all(loadPromises);
+            try {
+                await Promise.all(loadPromises);
+            } catch (error) {
+                console.error('EnemyManager: Some sprites failed to load:', error);
+                // Continue anyway - enemies without sprites won't spawn
+            }
         }
     }
 
     public spawnLevel(level: number): void {
+        if (this.isDestroyed || !this.isSceneActive()) {
+            console.warn('EnemyManager: Cannot spawn level - manager or scene not active');
+            return;
+        }
+
         this.clearAll();
 
         const spawnConfigs = this.getSpawnPositions(level);
 
         for (const spawn of spawnConfigs) {
             const config = ENEMY_CONFIGS[spawn.type];
+            const textureExists = this.scene.textures.exists(spawn.type);
 
-            if (config && this.loadedTextures.has(spawn.type)) {
+            if (config && textureExists) {
                 this.spawnEnemy(spawn.type, spawn.x, spawn.y, config);
             } else {
-                console.warn(`Cannot spawn ${spawn.type} - texture not loaded`);
+                console.warn(`Cannot spawn ${spawn.type} - texture not loaded (exists: ${textureExists})`);
             }
         }
 
@@ -154,13 +303,24 @@ export class EnemyManager {
     }
 
     public update(): void {
+        if (this.isDestroyed || !this.isSceneActive()) return;
+
+        // Clean up dead enemies from the array periodically
+        this.enemies = this.enemies.filter(enemy => {
+            if (!enemy.isActive()) {
+                // Enemy is dead/destroyed, remove its colliders
+                return false;
+            }
+            return true;
+        });
+
         for (const enemy of this.enemies) {
             try {
                 if (enemy.isActive()) {
                     enemy.update(this.player);
                 }
             } catch (e) {
-                // Silently handle individual enemy update errors
+                console.warn('Enemy update error:', e);
             }
         }
     }
@@ -170,6 +330,10 @@ export class EnemyManager {
     }
 
     public clearAll(): void {
+        // Remove colliders first
+        this.removeAllColliders();
+
+        // Then destroy enemies
         for (const enemy of this.enemies) {
             enemy.destroy();
         }
@@ -177,8 +341,7 @@ export class EnemyManager {
     }
 
     public destroy(): void {
-        this.clearAll();
-        this.loadedTextures.clear();
+        this.cleanup(true);
     }
 
     // ==================================================================================
@@ -186,17 +349,35 @@ export class EnemyManager {
     // ==================================================================================
 
     private async loadEnemySprite(type: string): Promise<void> {
+        if (this.isDestroyed) {
+            throw new Error('Manager destroyed during load');
+        }
+
         console.log(`EnemyManager: Loading ${type} sprite...`);
+
+        // Create a cancellation token for this load
+        const loadState = { cancelled: false };
+        this.pendingLoads.set(type, loadState);
 
         try {
             // Get from localStorage cache (where api.ts stores them)
             const cacheKey = `enemy_${type}_spritesheet`;
             let spriteData = localStorage.getItem(cacheKey);
 
+            // Check if cancelled after localStorage access
+            if (loadState.cancelled) {
+                throw new Error('Load cancelled');
+            }
+
             if (!spriteData) {
                 // Not in cache - generate it now
                 console.log(`${type} not in cache, generating via API...`);
                 spriteData = await this.apiService.generateEnemySpriteSheet(type);
+
+                // Check if cancelled after API call
+                if (loadState.cancelled) {
+                    throw new Error('Load cancelled');
+                }
             }
 
             if (!spriteData || spriteData.length < 1000) {
@@ -204,22 +385,41 @@ export class EnemyManager {
             }
 
             // Create Phaser texture from the base64 data
-            await this.createTextureFromBase64(type, spriteData);
+            await this.createTextureFromBase64(type, spriteData, loadState);
 
-            this.loadedTextures.add(type);
-            console.log(`✓ ${type} sprite loaded successfully`);
-
+            // Only mark as loaded if not cancelled
+            if (!loadState.cancelled) {
+                EnemyManager.globalLoadedTextures.add(type);
+                console.log(`✓ ${type} sprite loaded successfully`);
+            }
         } catch (error) {
-            console.error(`Failed to load ${type} sprite:`, error);
+            if (loadState.cancelled) {
+                console.log(`Load cancelled for ${type}`);
+            } else {
+                console.error(`Failed to load ${type} sprite:`, error);
+            }
             throw error;
+        } finally {
+            this.pendingLoads.delete(type);
         }
     }
 
-    private createTextureFromBase64(type: string, base64Data: string): Promise<void> {
+    private createTextureFromBase64(
+        type: string,
+        base64Data: string,
+        loadState: { cancelled: boolean }
+    ): Promise<void> {
         return new Promise((resolve, reject) => {
+            // Check if already cancelled
+            if (loadState.cancelled || this.isDestroyed) {
+                reject(new Error('Load cancelled'));
+                return;
+            }
+
             // Skip if texture already exists
-            if (this.scene.textures.exists(type)) {
+            if (this.scene?.textures?.exists(type)) {
                 console.log(`Texture ${type} already exists`);
+                this.createEnemyAnimations(type);
                 resolve();
                 return;
             }
@@ -227,6 +427,13 @@ export class EnemyManager {
             const img = new Image();
 
             img.onload = () => {
+                // Check if cancelled or scene destroyed during image load
+                if (loadState.cancelled || this.isDestroyed || !this.isSceneActive()) {
+                    console.log(`Texture creation cancelled for ${type} - scene no longer active`);
+                    reject(new Error('Scene no longer active'));
+                    return;
+                }
+
                 try {
                     // The AI generates a 4x4 grid (16 frames)
                     const frameWidth = Math.floor(img.width / 4);
@@ -238,6 +445,12 @@ export class EnemyManager {
                     }
 
                     console.log(`${type} sprite: ${img.width}x${img.height}, frames: ${frameWidth}x${frameHeight}`);
+
+                    // Double-check scene is still valid
+                    if (!this.scene?.textures) {
+                        reject(new Error('Scene textures manager not available'));
+                        return;
+                    }
 
                     // Add as sprite sheet to Phaser
                     this.scene.textures.addSpriteSheet(type, img, {
@@ -274,6 +487,8 @@ export class EnemyManager {
     }
 
     private createEnemyAnimations(type: string): void {
+        if (this.isDestroyed || !this.scene?.anims) return;
+
         const config = ENEMY_CONFIGS[type];
         const frameRate = config?.frameRate || 8;
 
@@ -302,6 +517,7 @@ export class EnemyManager {
                         frameRate: frameRate,
                         repeat: -1,
                     });
+                    this.createdAnimations.push(anim.key);
                     console.log(`Created animation: ${anim.key}`);
                 } catch (e) {
                     console.warn(`Failed to create animation ${anim.key}:`, e);
@@ -315,21 +531,33 @@ export class EnemyManager {
     // ==================================================================================
 
     private spawnEnemy(type: string, x: number, y: number, config: EnemyConfig): void {
+        if (this.isDestroyed || !this.isSceneActive()) return;
+
         try {
             const enemy = new Enemy(this.scene, x, y, type, config);
 
             if (enemy.sprite) {
                 this.enemies.push(enemy);
 
+                // Setup collision with platforms/floor
+                if (this.platforms) {
+                    const platformCollider = this.scene.physics.add.collider(
+                        enemy.sprite,
+                        this.platforms
+                    );
+                    this.colliders.push(platformCollider);
+                }
+
                 // Setup collision with player if player exists
                 if (this.player) {
-                    this.scene.physics.add.overlap(
+                    const playerCollider = this.scene.physics.add.overlap(
                         this.player,
                         enemy.sprite,
                         () => this.handlePlayerEnemyCollision(enemy),
                         undefined,
                         this
                     );
+                    this.colliders.push(playerCollider);
                 }
             } else {
                 console.warn(`Enemy ${type} created without sprite`);
@@ -378,6 +606,7 @@ export class EnemyManager {
     // ==================================================================================
 
     private handlePlayerEnemyCollision(enemy: Enemy): void {
+        if (this.isDestroyed || !this.isSceneActive()) return;
         if (!this.player || !enemy.isActive()) return;
 
         const playerBody = this.player.body;

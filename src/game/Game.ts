@@ -50,6 +50,10 @@ export class Game {
     // State flags
     private isCreating: boolean = true;
     private isDestroyed: boolean = false;
+    private isTransitioningLevel: boolean = false; // NEW: Prevent multiple transitions
+
+    // Track player-collectible collider for cleanup
+    private playerCollectibleCollider: any = null;
 
     // Public reference
     public gameInstance: Game;
@@ -74,6 +78,7 @@ export class Game {
         this.gameInstance = this;
         this.isCreating = true;
         this.isDestroyed = false;
+        this.isTransitioningLevel = false;
 
         // Initialize state manager with callbacks
         this.stateManager = new GameStateManager({
@@ -92,7 +97,6 @@ export class Game {
     // ==================================================================================
 
     private initializePhaser(): void {
-        // Use arrow functions to properly capture 'this' and receive 'scene' from Phaser
         const gameInstance = this;
 
         const config = {
@@ -123,6 +127,20 @@ export class Game {
         };
 
         this.game = new Phaser.Game(config);
+    }
+
+    // ==================================================================================
+    // UTILITY METHODS
+    // ==================================================================================
+
+    private isSceneActive(): boolean {
+        return (
+            !this.isDestroyed &&
+            this.currentScene &&
+            this.currentScene.sys &&
+            this.currentScene.sys.isActive() &&
+            !this.currentScene.sys.isTransitioning()
+        );
     }
 
     // ==================================================================================
@@ -157,14 +175,12 @@ export class Game {
     private async create(scene: PhaserScene): Promise<void> {
         if (this.isDestroyed) return;
 
-        // CRITICAL: Set creating flag immediately
         this.isCreating = true;
         this.currentScene = scene;
 
         try {
             console.log('Game: Create started');
 
-            // Validate scene is ready
             if (!scene || !scene.textures || !scene.physics) {
                 throw new Error('Scene not fully initialized');
             }
@@ -197,10 +213,7 @@ export class Game {
             this.animationManager.createPlayerAnimations();
 
             // Setup collectible collision
-            const player = this.playerController.getSprite();
-            if (player) {
-                this.levelManager.setupPlayerCollision(player, this.handleCollectItem);
-            }
+            this.setupCollectibleCollision();
 
             // Initialize enemies
             await this.initializeEnemies(scene);
@@ -217,6 +230,7 @@ export class Game {
             this.uiManager.updateAll(state.score, state.level, state.lives);
 
             // Play idle animation
+            const player = this.playerController.getSprite();
             player?.play('idle');
 
             console.log('Game: Create finished successfully');
@@ -226,20 +240,18 @@ export class Game {
                 this.handleCriticalError(error instanceof Error ? error.message : 'Create error');
             }
         } finally {
-            // CRITICAL: Only allow update() to run after create() is fully complete
             this.isCreating = false;
         }
     }
 
     private update(scene: PhaserScene): void {
-        // Guard clauses - don't run update if not ready
+        // Guard clauses
         if (this.isDestroyed) return;
         if (this.isCreating) return;
+        if (this.isTransitioningLevel) return; // Don't update during transitions
         if (!this.currentScene) return;
         if (this.stateManager.isGameOver()) return;
         if (this.stateManager.isPaused()) return;
-
-        // Additional safety check
         if (!this.levelManager || !this.playerController) return;
 
         // Update player
@@ -263,58 +275,161 @@ export class Game {
     }
 
     // ==================================================================================
+    // COLLISION SETUP
+    // ==================================================================================
+
+    private setupCollectibleCollision(): void {
+        // Remove existing collider if any
+        if (this.playerCollectibleCollider) {
+            this.playerCollectibleCollider.destroy();
+            this.playerCollectibleCollider = null;
+        }
+
+        const player = this.playerController?.getSprite();
+        const collectibles = this.levelManager?.getCollectibles();
+
+        if (player && collectibles) {
+            this.playerCollectibleCollider = this.currentScene?.physics.add.overlap(
+                player,
+                collectibles,
+                this.handleCollectItem,
+                undefined,
+                this
+            );
+        }
+    }
+
+    // ==================================================================================
     // LEVEL MANAGEMENT
     // ==================================================================================
 
     private checkLevelComplete(): void {
-        if (this.isCreating || this.isDestroyed) return;
+        if (this.isCreating || this.isDestroyed || this.isTransitioningLevel) return;
+        if (!this.levelManager) return;
 
-        const collectiblesLeft = this.levelManager?.getActiveCollectibleCount() ?? -1;
-        const enemiesLeft = this.enemyManager?.getActiveCount() ?? -1;
+        const collectiblesLeft = this.levelManager.getActiveCollectibleCount();
+        const enemiesLeft = this.enemyManager?.getActiveCount() ?? 0;
 
-        // Only advance if we have valid counts (not default -1)
         if (collectiblesLeft === 0 && enemiesLeft === 0) {
+            console.log('Level complete! Advancing...');
             this.advanceLevel();
         }
     }
 
     private advanceLevel(): void {
+        // Prevent multiple simultaneous transitions
         if (this.stateManager.isGameOver()) return;
         if (this.isCreating) return;
         if (this.isDestroyed) return;
+        if (this.isTransitioningLevel) return;
 
         const canContinue = this.stateManager.nextLevel();
         if (!canContinue) return;
 
+        // Lock transition state
+        this.isTransitioningLevel = true;
+
+        // Pause game state but keep physics running for transition effects
         this.stateManager.setPaused(true);
 
         this.uiManager?.showLevelTransition(this.stateManager.getLevel(), async () => {
-            if (this.isDestroyed) return;
+            await this.performLevelTransition();
+        });
+    }
 
-            this.stateManager.setPaused(false);
+    private async performLevelTransition(): Promise<void> {
+        // Verify we're still in valid state
+        if (this.isDestroyed || !this.isSceneActive()) {
+            this.isTransitioningLevel = false;
+            return;
+        }
 
-            // Clear and recreate level
-            this.enemyManager?.clearAll();
-            this.levelManager?.createLevel(this.stateManager.getLevel());
+        try {
+            console.log('Performing level transition...');
 
-            // Reset player
-            this.playerController?.resetPosition();
+            // 1. PAUSE PHYSICS - Critical to prevent collision callbacks during cleanup
+            this.currentScene?.physics.pause();
 
-            // Setup collisions
-            const player = this.playerController?.getSprite();
-            if (player) {
-                this.levelManager?.setupPlayerCollision(player, this.handleCollectItem);
+            // 2. CLEANUP OLD LEVEL
+            // Remove old collectible collider
+            if (this.playerCollectibleCollider) {
+                this.playerCollectibleCollider.destroy();
+                this.playerCollectibleCollider = null;
             }
 
-            // Spawn enemies
+            // Clear enemies first (they hold references to platforms)
+            this.enemyManager?.clearAll();
+
+            // Clear level (platforms, collectibles)
+            this.levelManager?.clearLevel();
+
+            // Give a frame for cleanup to complete
+            await this.waitForFrame();
+            if (this.isDestroyed) return;
+
+            // 3. PRELOAD NEW LEVEL'S ENEMIES
+            const newLevel = this.stateManager.getLevel();
+            console.log(`Loading assets for level ${newLevel}...`);
+
             try {
-                await this.enemyManager?.preloadSprites(this.stateManager.getLevel(), true);
-                this.enemyManager?.spawnLevel(this.stateManager.getLevel());
-                if (player) {
-                    this.enemyManager?.setPlayer(player);
-                }
+                await this.enemyManager?.preloadSprites(newLevel, true);
             } catch (e) {
-                console.warn('Failed to load enemies for new level:', e);
+                console.warn('Failed to preload enemy sprites:', e);
+                // Continue anyway - enemies just won't spawn
+            }
+
+            if (this.isDestroyed) return;
+
+            // 4. CREATE NEW LEVEL
+            console.log(`Creating level ${newLevel}...`);
+            this.levelManager?.createLevel(newLevel);
+
+            // 5. RESET PLAYER
+            this.playerController?.resetPosition();
+
+            // Update player's platform collision
+            const platforms = this.levelManager?.getPlatforms();
+            if (platforms) {
+                this.playerController?.updatePlatformCollision(platforms);
+            }
+
+            // 6. SETUP COLLECTIBLE COLLISION
+            this.setupCollectibleCollision();
+
+            // 7. SETUP ENEMIES
+            if (platforms) {
+                this.enemyManager?.setPlatforms(platforms);
+            }
+
+            this.enemyManager?.spawnLevel(newLevel);
+
+            const player = this.playerController?.getSprite();
+            if (player) {
+                this.enemyManager?.setPlayer(player);
+            }
+
+            // 8. RESUME GAME
+            console.log(`Level ${newLevel} ready!`);
+
+            this.currentScene?.physics.resume();
+            this.stateManager.setPaused(false);
+
+        } catch (error) {
+            console.error('Level transition error:', error);
+            // Try to recover
+            this.currentScene?.physics.resume();
+            this.stateManager.setPaused(false);
+        } finally {
+            this.isTransitioningLevel = false;
+        }
+    }
+
+    private waitForFrame(): Promise<void> {
+        return new Promise(resolve => {
+            if (this.currentScene && !this.isDestroyed) {
+                this.currentScene.time.delayedCall(16, resolve); // ~1 frame at 60fps
+            } else {
+                resolve();
             }
         });
     }
@@ -330,6 +445,12 @@ export class Game {
             onEnemyKilled: (enemy: Enemy) => this.onEnemyKilled(enemy),
             onPlayerHit: (enemy: Enemy) => this.onPlayerHit(enemy),
         });
+
+        // Pass platforms to enemy manager for collision
+        const platforms = this.levelManager?.getPlatforms();
+        if (platforms) {
+            this.enemyManager.setPlatforms(platforms);
+        }
 
         const player = this.playerController?.getSprite();
         if (player) {
@@ -365,19 +486,30 @@ export class Game {
     }
 
     // ==================================================================================
-    // GAME EVENTS (Arrow functions to preserve 'this' context)
+    // GAME EVENTS
     // ==================================================================================
 
     private handleCollectItem = (_player: PhaserSprite, item: PhaserSprite): void => {
-        if (this.isDestroyed) return;
+        if (this.isDestroyed || this.isTransitioningLevel) return;
+        if (!item || !item.active) return;
 
+        // Properly disable and hide the collectible
         item.disableBody(true, true);
+        item.setActive(false);
+        item.setVisible(false);
+
+        // Stop any tweens on this collectible
+        this.currentScene?.tweens.killTweensOf(item);
+
         this.stateManager.addScore(10);
         this.uiManager?.createScorePopup(item.x, item.y, '+10');
+
+        const remaining = this.levelManager?.getActiveCollectibleCount() ?? 0;
+        console.log(`Collected! Remaining collectibles: ${remaining}`);
     };
 
     private onEnemyKilled(enemy: Enemy): void {
-        if (this.isDestroyed) return;
+        if (this.isDestroyed || this.isTransitioningLevel) return;
 
         const scoreValue = enemy.getScoreValue();
         this.stateManager.addScore(scoreValue);
@@ -388,14 +520,13 @@ export class Game {
             `+${scoreValue}`
         );
 
-        // Camera shake based on enemy type
         const shakeIntensity = enemy.type === 'mailman' ? 0.03 : 0.005;
         const shakeDuration = enemy.type === 'mailman' ? 400 : 100;
         this.currentScene?.cameras.main.shake(shakeDuration, shakeIntensity);
     }
 
     private onPlayerHit(enemy: Enemy): void {
-        if (this.isDestroyed) return;
+        if (this.isDestroyed || this.isTransitioningLevel) return;
 
         if (!this.playerController?.isInvulnerable()) {
             this.handlePlayerDamage(enemy.config.damage);
@@ -403,7 +534,7 @@ export class Game {
     }
 
     private handlePlayerDamage(damage: number = 1): void {
-        if (this.isDestroyed) return;
+        if (this.isDestroyed || this.isTransitioningLevel) return;
 
         this.playerController?.resetPosition();
         this.playerController?.takeDamage();
@@ -419,6 +550,7 @@ export class Game {
     private handleGameOver(score: number): void {
         if (this.isDestroyed) return;
 
+        this.isTransitioningLevel = false; // Reset in case we died during transition
         this.currentScene?.physics.pause();
         this.uiManager?.showGameOver(score, () => this.restartGame());
     }
@@ -426,6 +558,7 @@ export class Game {
     private handleWin(score: number): void {
         if (this.isDestroyed) return;
 
+        this.isTransitioningLevel = false;
         this.currentScene?.physics.pause();
         this.uiManager?.showWin(score, () => this.restartGame());
     }
@@ -433,6 +566,7 @@ export class Game {
     public togglePause(): void {
         if (this.isDestroyed) return;
         if (this.stateManager.isGameOver()) return;
+        if (this.isTransitioningLevel) return; // Can't pause during transition
 
         const isPaused = this.stateManager.togglePause();
 
@@ -451,10 +585,12 @@ export class Game {
     }
 
     public restartGame(): void {
+        // Ensure we're not in a transition
+        this.isTransitioningLevel = false;
+
         this.destroy();
         this.uiManager?.removeAllOverlays();
 
-        // Use characterManager's returnToMenu if available
         const cm = (window as any).characterManager;
         if (cm?.returnToMenu) {
             cm.returnToMenu();
@@ -473,9 +609,9 @@ export class Game {
 
         console.error('CRITICAL ERROR:', message);
 
-        // Set flags to stop all processing
-        this.isCreating = true; // Prevent update from running
+        this.isCreating = true;
         this.isDestroyed = true;
+        this.isTransitioningLevel = false;
 
         errorHandler.createError(
             ErrorType.ASSET_LOAD_ERROR,
@@ -520,15 +656,19 @@ export class Game {
 
         console.log('Game: Cleaning up...');
 
-        // Set flags first to stop all processing
         this.isDestroyed = true;
         this.isCreating = true;
+        this.isTransitioningLevel = false;
 
-        // Destroy managers
-        try {
-            this.backgroundManager?.destroy();
-        } catch (e) { /* ignore */ }
+        // Remove collectible collider
+        if (this.playerCollectibleCollider) {
+            try {
+                this.playerCollectibleCollider.destroy();
+            } catch (e) { /* ignore */ }
+            this.playerCollectibleCollider = null;
+        }
 
+        // Destroy managers in reverse order of dependency
         try {
             this.enemyManager?.destroy();
         } catch (e) { /* ignore */ }
@@ -539,6 +679,10 @@ export class Game {
 
         try {
             this.playerController?.destroy();
+        } catch (e) { /* ignore */ }
+
+        try {
+            this.backgroundManager?.destroy();
         } catch (e) { /* ignore */ }
 
         // Clear references
@@ -556,7 +700,6 @@ export class Game {
         } catch (e) { /* ignore */ }
         this.game = null;
 
-        // Reset state
         this.stateManager.reset();
 
         console.log('Game: Destroyed');

@@ -10,36 +10,104 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+    <!-- Scanline Overlay for Retro Effect -->
+    <div class="scanlines"></div>
+
     <div id="game-container">
         <!-- ============================================ -->
         <!-- LOADING SCREEN -->
         <!-- ============================================ -->
         <div id="loading-screen" class="screen">
-            <img src="assets/MyPupLogo.png" alt="MyPup Platformer" id="loading-logo">
-
-            <div id="loading-container">
-                <h2 id="loading-title">Preparing Your Adventure</h2>
-                <p id="loading-subtitle">Generating AI assets...</p>
-
-                <div id="loading-bar-container">
-                    <div id="loading-bar">
-                        <div id="loading-bar-fill"></div>
-                    </div>
-                    <span id="loading-percentage">0%</span>
+            <div class="loading-content">
+                <!-- Animated Stars Background -->
+                <div class="stars-container">
+                    <div class="star star-1">✦</div>
+                    <div class="star star-2">✧</div>
+                    <div class="star star-3">✦</div>
+                    <div class="star star-4">✧</div>
+                    <div class="star star-5">✦</div>
+                    <div class="star star-6">✧</div>
                 </div>
 
-                <div id="loading-status">
-                    <div class="loading-item" id="loading-background">
-                        <span class="loading-icon">⏳</span>
-                        <span class="loading-text">Background</span>
-                    </div>
-                    <div class="loading-item" id="loading-enemies">
-                        <span class="loading-icon">⏳</span>
-                        <span class="loading-text">Enemies</span>
+                <!-- Logo with Bounce Animation -->
+                <div class="logo-container">
+                    <img src="assets/MyPupLogo.png" alt="MyPup Platformer" id="loading-logo" class="pixel-logo">
+                    <div class="logo-shadow"></div>
+                </div>
+
+                <!-- Main Loading Box -->
+                <div id="loading-container" class="pixel-box">
+                    <div class="pixel-box-inner">
+                        <!-- Title with Typewriter Effect -->
+                        <h2 id="loading-title">
+                            <span class="title-text">LOADING</span>
+                            <span class="loading-dots">
+                                <span class="dot">.</span>
+                                <span class="dot">.</span>
+                                <span class="dot">.</span>
+                            </span>
+                        </h2>
+
+                        <p id="loading-subtitle">Generating AI Assets</p>
+
+                        <!-- Retro Progress Bar -->
+                        <div id="loading-bar-container">
+                            <div class="progress-label">PROGRESS</div>
+                            <div id="loading-bar" class="pixel-progress">
+                                <div id="loading-bar-fill" class="pixel-progress-fill">
+                                    <div class="progress-shine"></div>
+                                </div>
+                                <div class="progress-segments">
+                                    <span></span><span></span><span></span><span></span>
+                                    <span></span><span></span><span></span><span></span>
+                                    <span></span><span></span>
+                                </div>
+                            </div>
+                            <span id="loading-percentage" class="pixel-percentage">0%</span>
+                        </div>
+
+                        <!-- Asset Loading Status -->
+                        <div id="loading-status">
+                            <div class="loading-item" id="loading-background">
+                                <span class="loading-icon pixel-icon">
+                                    <span class="icon-pending">⏳</span>
+                                    <span class="icon-done">✅</span>
+                                </span>
+                                <span class="loading-text">WORLD</span>
+                                <span class="loading-bar-mini"></span>
+                            </div>
+                            <div class="loading-item" id="loading-enemies">
+                                <span class="loading-icon pixel-icon">
+                                    <span class="icon-pending">⏳</span>
+                                    <span class="icon-done">✅</span>
+                                </span>
+                                <span class="loading-text">ENEMIES</span>
+                                <span class="loading-bar-mini"></span>
+                            </div>
+                        </div>
+
+                        <!-- Animated Pixel Dog -->
+                        <div class="loading-mascot">
+                            <div class="pixel-dog">
+                                <span class="dog-body">🐕</span>
+                                <span class="dog-tail"></span>
+                            </div>
+                            <div class="mascot-ground"></div>
+                        </div>
                     </div>
                 </div>
 
-                <p id="loading-tip" class="loading-tip">💡 Tip: Upload a photo of your dog to play as them!</p>
+                <!-- Rotating Tips -->
+                <div id="loading-tip-container" class="pixel-tip-box">
+                    <span class="tip-icon">💡</span>
+                    <p id="loading-tip" class="loading-tip">Upload a photo of your dog to play as them!</p>
+                </div>
+
+                <!-- Bottom Decorative Elements -->
+                <div class="loading-footer">
+                    <span class="footer-text">PRESS START</span>
+                    <div class="blink-cursor">_</div>
+                </div>
             </div>
         </div>
 
@@ -47,55 +115,93 @@
         <!-- MENU SCREEN -->
         <!-- ============================================ -->
         <div id="menu-screen" class="screen hidden">
-            <img src="assets/MyPupLogo.png" alt="MyPup Platformer" id="game-logo">
+            <div class="menu-content">
+                <!-- Animated Background Pattern -->
+                <div class="menu-bg-pattern"></div>
 
-            <div id="customization-panel">
-                <div id="debug-mode-indicator" class="debug-indicator" style="display: none;"></div>
-
-                <div class="upload-section">
-                    <label for="dog-image-upload" class="upload-button">
-                        <span class="upload-icon">📸</span>
-                        <span class="upload-text">Upload Your Dog's Photo</span>
-                    </label>
-                    <input type="file" id="dog-image-upload" accept="image/*" style="display: none;">
-                    <div id="upload-preview" class="preview-container"></div>
+                <!-- Logo -->
+                <div class="logo-container menu-logo">
+                    <img src="assets/MyPupLogo.png" alt="MyPup Platformer" id="game-logo" class="pixel-logo">
+                    <div class="logo-glow"></div>
                 </div>
 
-                <div id="sprite-generation-progress" class="progress-container hidden">
-                    <div class="progress-bar">
-                        <div id="sprite-progress-fill" class="progress-fill"></div>
+                <!-- Main Menu Panel -->
+                <div id="customization-panel" class="pixel-box menu-panel">
+                    <div class="pixel-box-inner">
+                        <div id="debug-mode-indicator" class="debug-indicator" style="display: none;">
+                            DEBUG MODE
+                        </div>
+
+                        <!-- Upload Section -->
+                        <div class="upload-section">
+                            <h3 class="section-title">SELECT YOUR PUP</h3>
+
+                            <label for="dog-image-upload" class="upload-button pixel-button">
+                                <span class="upload-icon">📸</span>
+                                <span class="upload-text">UPLOAD PHOTO</span>
+                                <span class="button-shine"></span>
+                            </label>
+                            <input type="file" id="dog-image-upload" accept="image/*" style="display: none;">
+
+                            <div id="upload-preview" class="preview-container pixel-preview">
+                                <div class="preview-placeholder">
+                                    <span class="placeholder-icon">🐾</span>
+                                    <span class="placeholder-text">NO IMAGE</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Progress Section -->
+                        <div id="sprite-generation-progress" class="progress-container hidden">
+                            <div class="progress-bar pixel-progress">
+                                <div id="sprite-progress-fill" class="progress-fill pixel-progress-fill"></div>
+                            </div>
+                            <span id="sprite-progress-text" class="progress-text">GENERATING...</span>
+                        </div>
+
+                        <div id="generation-status" class="status-message"></div>
+
+                        <!-- Start Button -->
+                        <button id="start-game-btn" class="action-button pixel-button-large" disabled>
+                            <span class="button-icon">🎮</span>
+                            <span class="button-text">START GAME</span>
+                            <span class="button-shine"></span>
+                        </button>
                     </div>
-                    <span id="sprite-progress-text" class="progress-text">Generating sprite...</span>
                 </div>
 
-                <div id="generation-status" class="status-message"></div>
+                <!-- Instructions Panel -->
+                <div class="instructions pixel-box">
+                    <div class="pixel-box-inner">
+                        <h3 class="section-title">HOW TO PLAY</h3>
 
-                <button id="start-game-btn" class="action-button" disabled>
-                    <span class="button-icon">🎮</span>
-                    <span>Start Game</span>
-                </button>
+                        <div class="instruction-grid">
+                            <div class="instruction-item">
+                                <div class="key-group">
+                                    <span class="key pixel-key">◄</span>
+                                    <span class="key pixel-key">►</span>
+                                </div>
+                                <span class="instruction-label">MOVE</span>
+                            </div>
+                            <div class="instruction-item">
+                                <span class="key pixel-key large-key">▲</span>
+                                <span class="instruction-label">JUMP</span>
+                            </div>
+                            <div class="instruction-item">
+                                <span class="key pixel-key large-key">SPACE</span>
+                                <span class="instruction-label">JUMP</span>
+                            </div>
+                            <div class="instruction-item">
+                                <span class="key pixel-key">ESC</span>
+                                <span class="instruction-label">PAUSE</span>
+                            </div>
+                        </div>
 
-                <div class="instructions">
-                    <h3>How to Play</h3>
-                    <div class="instruction-grid">
-                        <div class="instruction-item">
-                            <span class="key">←→</span>
-                            <span>Move</span>
-                        </div>
-                        <div class="instruction-item">
-                            <span class="key">↑</span>
-                            <span>Jump</span>
-                        </div>
-                        <div class="instruction-item">
-                            <span class="key">SPACE</span>
-                            <span>Jump</span>
-                        </div>
-                        <div class="instruction-item">
-                            <span class="key">ESC</span>
-                            <span>Pause</span>
+                        <div class="goal-box">
+                            <span class="goal-icon">🎯</span>
+                            <p class="goal-text">Defeat enemies & collect items to advance!</p>
                         </div>
                     </div>
-                    <p class="tip">💡 Defeat all enemies and collect everything to progress to the next level!</p>
                 </div>
             </div>
         </div>
@@ -104,47 +210,54 @@
         <!-- GAME SCREEN -->
         <!-- ============================================ -->
         <div id="game-screen" class="screen hidden">
-            <div id="debug-mode-indicator-game" class="debug-indicator-game" style="display: none;"></div>
+            <div id="debug-mode-indicator-game" class="debug-indicator-game" style="display: none;">
+                DEBUG
+            </div>
 
             <!-- Phaser Canvas Container -->
             <div id="phaser-game"></div>
 
             <!-- Game UI Overlay -->
-            <div id="game-ui">
+            <div id="game-ui" class="pixel-ui">
                 <div class="ui-left">
-                    <div id="score" class="ui-stat">
+                    <div id="score" class="ui-stat pixel-stat">
                         <span class="stat-icon">⭐</span>
+                        <span class="stat-label">SCORE</span>
                         <span class="stat-value">0</span>
                     </div>
-                    <div id="level" class="ui-stat">
+                    <div id="level" class="ui-stat pixel-stat">
                         <span class="stat-icon">🏔️</span>
-                        <span class="stat-value">Level 1</span>
+                        <span class="stat-label">LEVEL</span>
+                        <span class="stat-value">1</span>
                     </div>
                 </div>
 
                 <div class="ui-center">
-                    <div id="lives" class="ui-lives">
-                        <span class="heart">❤️</span>
-                        <span class="heart">❤️</span>
-                        <span class="heart">❤️</span>
+                    <div id="lives" class="ui-lives pixel-lives">
+                        <span class="lives-label">LIFE</span>
+                        <div class="hearts-container">
+                            <span class="heart">❤️</span>
+                            <span class="heart">❤️</span>
+                            <span class="heart">❤️</span>
+                        </div>
                     </div>
                 </div>
 
                 <div class="ui-right">
-                    <button id="pause-btn" class="ui-button">
+                    <button id="pause-btn" class="ui-button pixel-button-small">
                         <span class="button-icon">⏸️</span>
-                        <span class="button-text">Pause</span>
+                        <span class="button-text">PAUSE</span>
                     </button>
                 </div>
             </div>
 
-            <!-- Mobile Controls (Hidden by default, shown on touch devices) -->
+            <!-- Mobile Controls -->
             <div id="mobile-controls" class="mobile-controls hidden">
                 <div class="mobile-dpad">
-                    <button class="mobile-btn" id="mobile-left">◀</button>
-                    <button class="mobile-btn" id="mobile-right">▶</button>
+                    <button class="mobile-btn pixel-mobile-btn" id="mobile-left">◀</button>
+                    <button class="mobile-btn pixel-mobile-btn" id="mobile-right">▶</button>
                 </div>
-                <button class="mobile-btn mobile-jump" id="mobile-jump">JUMP</button>
+                <button class="mobile-btn pixel-mobile-btn mobile-jump" id="mobile-jump">JUMP</button>
             </div>
         </div>
     </div>
@@ -155,12 +268,35 @@
     <!-- Game Scripts -->
     <script type="module" src="dist/main.js"></script>
 
-    <!-- Mobile Detection -->
+    <!-- Mobile Detection & Loading Tips -->
     <script>
         // Show mobile controls on touch devices
         if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
             document.getElementById('mobile-controls')?.classList.remove('hidden');
         }
+
+        // Rotate loading tips
+        const tips = [
+            "Upload a photo of your dog to play as them!",
+            "Jump on enemies to defeat them!",
+            "Collect all items to complete each level!",
+            "The mailman boss appears in Level 3!",
+            "Watch out for flying birds!",
+            "Press ESC to pause the game anytime!",
+        ];
+        let tipIndex = 0;
+        const tipElement = document.getElementById('loading-tip');
+
+        setInterval(() => {
+            if (tipElement) {
+                tipElement.style.opacity = '0';
+                setTimeout(() => {
+                    tipIndex = (tipIndex + 1) % tips.length;
+                    tipElement.textContent = tips[tipIndex];
+                    tipElement.style.opacity = '1';
+                }, 300);
+            }
+        }, 4000);
     </script>
 </body>
 </html>

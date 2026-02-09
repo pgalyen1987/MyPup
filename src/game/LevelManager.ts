@@ -6,13 +6,45 @@
 import { CONFIG } from '../config.js';
 import { PhaserScene, PhaserSprite, PhaserGroup, PlatformConfig, CollectibleConfig } from './types.js';
 
+// Type for Phaser collider
+type PhaserCollider = any;
+
 export class LevelManager {
     private scene: PhaserScene;
     private platforms: PhaserGroup | null = null;
     private collectibles: PhaserGroup | null = null;
+    private floor: any | null = null;
+
+    // Track colliders for cleanup
+    private playerPlatformCollider: PhaserCollider | null = null;
+    private playerCollectibleCollider: PhaserCollider | null = null;
+
+    // Track if destroyed
+    private isDestroyed: boolean = false;
 
     constructor(scene: PhaserScene) {
         this.scene = scene;
+
+        // Listen for scene shutdown
+        this.scene.events?.once('shutdown', this.onSceneShutdown, this);
+        this.scene.events?.once('destroy', this.onSceneShutdown, this);
+    }
+
+    // ==================================================================================
+    // SCENE LIFECYCLE
+    // ==================================================================================
+
+    private onSceneShutdown(): void {
+        this.destroy();
+    }
+
+    private isSceneActive(): boolean {
+        return (
+            !this.isDestroyed &&
+            this.scene &&
+            this.scene.sys &&
+            this.scene.sys.isActive()
+        );
     }
 
     // ==================================================================================
@@ -20,40 +52,58 @@ export class LevelManager {
     // ==================================================================================
 
     public createLevel(level: number): void {
-        console.log(`LevelManager: Creating level ${level}...`);
-        this.clearGroups();
+        if (this.isDestroyed || !this.isSceneActive()) {
+            console.warn('LevelManager: Cannot create level - manager or scene not active');
+            return;
+        }
 
+        console.log(`LevelManager: Creating level ${level}...`);
+
+        // Clear previous level content (but not colliders - those are managed separately)
+        this.clearLevelContent();
+
+        // Create new groups
         this.platforms = this.scene.physics.add.staticGroup();
         this.collectibles = this.scene.physics.add.group();
 
+        // Build level
         this.createFloor();
         this.createPlatforms(level);
         this.createCollectibles(level);
+
+        console.log(`LevelManager: Level ${level} created with ${this.getActiveCollectibleCount()} collectibles`);
     }
 
     private createFloor(): void {
+        if (!this.isSceneActive()) return;
+
         const worldWidth = CONFIG.GAME_WIDTH * 3;
         const floorY = CONFIG.GAME_HEIGHT - (CONFIG.TILE_SIZE / 2);
         const floorHeight = CONFIG.TILE_SIZE;
 
-        const floor = this.scene.add.rectangle(
+        // Create an invisible floor - just a physics body, no visual
+        this.floor = this.scene.add.zone(
             worldWidth / 2,
             floorY,
             worldWidth,
-            floorHeight,
-            CONFIG.VISUAL?.GROUND_COLOR || 0x654321
+            floorHeight
         );
-        floor.setOrigin(0.5, 0.5);
-        floor.setDepth((CONFIG.VISUAL?.DEPTH_BACKGROUND || 0) + 1);
 
-        this.scene.physics.add.existing(floor, true);
-        if (floor.body) {
-            floor.body.setSize(worldWidth, floorHeight);
+        // Add physics to the zone
+        this.scene.physics.add.existing(this.floor, true); // true = static body
+
+        // Set the physics body size
+        if (this.floor.body) {
+            this.floor.body.setSize(worldWidth, floorHeight);
         }
-        this.platforms?.add(floor);
+
+        // Add to platforms group for collision detection
+        this.platforms?.add(this.floor);
     }
 
     private createPlatforms(level: number): void {
+        if (!this.isSceneActive() || !this.platforms) return;
+
         const TILE = CONFIG.TILE_SIZE;
 
         const platformConfigs: Record<number, PlatformConfig[]> = {
@@ -99,18 +149,20 @@ export class LevelManager {
                 CONFIG.VISUAL?.PLATFORM_COLOR || 0x8B4513
             );
             platform.setOrigin(0.5, 0.5);
-            platform.setDepth((CONFIG.VISUAL?.DEPTH_BACKGROUND || 0) + 2);
+            platform.setDepth((CONFIG.VISUAL?.DEPTH_TILES || 0) + 1);
             this.scene.physics.add.existing(platform, true);
 
             if (platform.body) {
                 platform.body.setSize(width, height);
             }
 
-            this.platforms?.add(platform);
+            this.platforms.add(platform);
         }
     }
 
     private createCollectibles(level: number): void {
+        if (!this.isSceneActive() || !this.collectibles) return;
+
         this.createCollectibleTexture();
 
         const collectibleConfigs: Record<number, CollectibleConfig[]> = {
@@ -143,7 +195,7 @@ export class LevelManager {
         const positions = collectibleConfigs[level] || collectibleConfigs[1];
 
         for (const pos of positions) {
-            const c = this.collectibles?.create(pos.x, pos.y, 'collectible');
+            const c = this.collectibles.create(pos.x, pos.y, 'collectible') as PhaserSprite;
             if (c) {
                 c.body.setAllowGravity(false);
                 c.body.setSize(CONFIG.TILE_SIZE * 0.5, CONFIG.TILE_SIZE * 0.5);
@@ -162,6 +214,7 @@ export class LevelManager {
     }
 
     private createCollectibleTexture(): void {
+        if (!this.isSceneActive()) return;
         if (this.scene.textures.exists('collectible')) return;
 
         const g = this.scene.add.graphics();
@@ -190,35 +243,166 @@ export class LevelManager {
     }
 
     public getActiveCollectibleCount(): number {
-        return this.collectibles?.countActive(true) ?? 0;
+        if (!this.collectibles) return 0;
+
+        let count = 0;
+        this.collectibles.children.iterate((child: any) => {
+            if (child && child.active && child.visible) {
+                count++;
+            }
+            return true;
+        });
+
+        return count;
     }
 
     // ==================================================================================
     // COLLISION SETUP
     // ==================================================================================
 
-    public setupPlayerCollision(player: PhaserSprite, onCollect: (player: PhaserSprite, item: PhaserSprite) => void): void {
+    /**
+     * Sets up player collision with platforms and collectibles.
+     * Tracks colliders for proper cleanup during level transitions.
+     */
+    public setupPlayerCollision(
+        player: PhaserSprite,
+        onCollect: (player: PhaserSprite, item: PhaserSprite) => void
+    ): void {
+        if (!this.isSceneActive()) return;
+
+        // Remove existing colliders first
+        this.removePlayerColliders();
+
+        // Setup platform collision
         if (player && this.platforms) {
-            this.scene.physics.add.collider(player, this.platforms);
+            this.playerPlatformCollider = this.scene.physics.add.collider(
+                player,
+                this.platforms
+            );
         }
 
+        // Setup collectible overlap
         if (player && this.collectibles) {
-            this.scene.physics.add.overlap(player, this.collectibles, onCollect, undefined, this);
+            this.playerCollectibleCollider = this.scene.physics.add.overlap(
+                player,
+                this.collectibles,
+                (p: any, c: any) => {
+                    // Only trigger if collectible is still active
+                    if (c.active && c.visible) {
+                        onCollect(p as PhaserSprite, c as PhaserSprite);
+                    }
+                },
+                undefined,
+                this
+            );
         }
+    }
+
+    /**
+     * Removes player colliders without destroying level content.
+     * Call this before setting up new collisions.
+     */
+    public removePlayerColliders(): void {
+        if (this.playerPlatformCollider) {
+            this.playerPlatformCollider.destroy();
+            this.playerPlatformCollider = null;
+        }
+
+        if (this.playerCollectibleCollider) {
+            this.playerCollectibleCollider.destroy();
+            this.playerCollectibleCollider = null;
+        }
+    }
+
+    /**
+     * Gets the current player-platform collider.
+     * Useful for Game.ts to manage collisions externally.
+     */
+    public getPlayerPlatformCollider(): PhaserCollider | null {
+        return this.playerPlatformCollider;
+    }
+
+    /**
+     * Gets the current player-collectible collider.
+     */
+    public getPlayerCollectibleCollider(): PhaserCollider | null {
+        return this.playerCollectibleCollider;
+    }
+
+    // ==================================================================================
+    // LEVEL TRANSITION
+    // ==================================================================================
+
+    /**
+     * Clears level content for transitioning to a new level.
+     * This removes collectibles, platforms, and their associated tweens,
+     * but keeps the manager ready to create a new level.
+     */
+    public clearLevel(): void {
+        console.log('LevelManager: Clearing level...');
+
+        // Remove colliders first (they reference the objects we're about to destroy)
+        this.removePlayerColliders();
+
+        // Clear level content
+        this.clearLevelContent();
+
+        console.log('LevelManager: Level cleared');
+    }
+
+    /**
+     * Internal method to clear level content (platforms, collectibles, floor).
+     * Does NOT remove colliders - use clearLevel() for full cleanup.
+     */
+    private clearLevelContent(): void {
+        // Kill all tweens on collectibles and destroy them
+        if (this.collectibles) {
+            this.collectibles.children.iterate((child: any) => {
+                if (child) {
+                    this.scene.tweens.killTweensOf(child);
+                }
+                return true;
+            });
+            this.collectibles.clear(true, true); // removeFromScene, destroyChildren
+        }
+
+        // Clear platforms (includes floor since floor is added to platforms group)
+        if (this.platforms) {
+            this.platforms.clear(true, true);
+        }
+
+        // Clear floor reference
+        this.floor = null;
     }
 
     // ==================================================================================
     // CLEANUP
     // ==================================================================================
 
-    private clearGroups(): void {
-        this.platforms?.clear(true, true);
-        this.collectibles?.clear(true, true);
-    }
-
     public destroy(): void {
-        this.clearGroups();
+        if (this.isDestroyed) return;
+        this.isDestroyed = true;
+
+        console.log('LevelManager: Destroying...');
+
+        // Remove scene event listeners
+        if (this.scene?.events) {
+            this.scene.events.off('shutdown', this.onSceneShutdown, this);
+            this.scene.events.off('destroy', this.onSceneShutdown, this);
+        }
+
+        // Remove colliders
+        this.removePlayerColliders();
+
+        // Clear level content
+        this.clearLevelContent();
+
+        // Null out references
         this.platforms = null;
         this.collectibles = null;
+        this.floor = null;
+        this.scene = null as any;
+
+        console.log('LevelManager: Destroyed');
     }
 }
