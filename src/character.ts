@@ -78,6 +78,9 @@ export class CharacterManager {
         this.assetStorage = assetStorage;
         this.gameClass = gameClass;
         this.setupEventListeners();
+
+        // Load any cached assets on initialization
+        this.loadCachedAssets();
     }
 
     // ==================================================================================
@@ -94,6 +97,39 @@ export class CharacterManager {
         if (startBtn) {
             startBtn.addEventListener('click', () => this.startGame());
         }
+    }
+
+    /**
+     * Load cached assets on startup - allows immediate restart after game over
+     */
+    private async loadCachedAssets(): Promise<void> {
+        console.log('Checking for cached assets...');
+
+        // Check for cached sprite
+        const cachedSprite = await this.getStoredItem('custom_sprite_sheet');
+        const cachedImage = await this.getStoredItem('original_dog_image');
+
+        if (cachedSprite && this.isValidSpriteSheet(cachedSprite)) {
+            console.log('✓ Found cached sprite sheet');
+            this.currentSpriteSheet = cachedSprite;
+            this.uploadedImage = cachedImage;
+            this.spriteReady = true;
+
+            if (cachedImage) {
+                this.updatePreviewHTML(cachedImage, 'Dog preview');
+            }
+            this.updatePreviewHTML(cachedSprite, 'Sprite Sheet Ready!', true);
+        }
+
+        // Check for cached background
+        await this.checkBackgroundReady();
+
+        if (this.backgroundReady) {
+            console.log('✓ Found cached background');
+        }
+
+        // Update UI state
+        await this.checkAllAssetsReady();
     }
 
     // ==================================================================================
@@ -151,12 +187,12 @@ export class CharacterManager {
 
         console.log('New image uploaded - clearing old sprite cache...');
 
-        // Reset ready state
+        // Reset sprite ready state (but NOT background - keep that cached)
         this.spriteReady = false;
         this.currentSpriteSheet = null;
         this.updateStartButton();
 
-        // Clear old cache
+        // Only clear sprite-related cache, NOT background
         await this.clearSpriteCache();
 
         // Read and process the file
@@ -192,6 +228,7 @@ export class CharacterManager {
     }
 
     private async clearSpriteCache(): Promise<void> {
+        // Only clear sprite-related items, NOT background
         const keysToRemove = [
             'custom_sprite_sheet',
             'original_dog_image',
@@ -201,6 +238,36 @@ export class CharacterManager {
         for (const key of keysToRemove) {
             await this.removeStoredItem(key);
         }
+    }
+
+    /**
+     * Clear ALL caches including background - use for full reset
+     */
+    public async clearAllCaches(): Promise<void> {
+        console.log('Clearing all caches...');
+
+        // Clear sprite cache
+        await this.clearSpriteCache();
+
+        // Clear background cache
+        const backgroundKeys = [
+            'location_background_frames',
+            'location_background_meta',
+            'location_background',
+        ];
+
+        for (const key of backgroundKeys) {
+            await this.removeStoredItem(key);
+        }
+
+        // Reset state
+        this.spriteReady = false;
+        this.backgroundReady = false;
+        this.currentSpriteSheet = null;
+        this.uploadedImage = null;
+
+        this.updateStartButton();
+        console.log('All caches cleared');
     }
 
     public async generateSpriteSheetWithRetry(): Promise<void> {
@@ -421,7 +488,7 @@ export class CharacterManager {
     }
 
     // ==================================================================================
-    // GAME START
+    // GAME START & RESTART
     // ==================================================================================
 
     public async startGame(): Promise<void> {
@@ -442,10 +509,13 @@ export class CharacterManager {
                 window.updateDebugIndicators();
             }
 
+            // Destroy previous game instance if exists
             if (this.currentGameInstance) {
                 this.currentGameInstance.destroy();
+                this.currentGameInstance = null;
             }
 
+            // Create new game instance
             this.currentGameInstance = new this.gameClass(
                 this.currentSpriteSheet,
                 this.apiService,
@@ -456,6 +526,22 @@ export class CharacterManager {
         } catch (error) {
             this.handleGameStartError(error, startBtn);
         }
+    }
+
+    /**
+     * Called when returning to menu after game over - preserves cached assets
+     */
+    public returnToMenu(): void {
+        // Destroy game instance but keep cached assets
+        if (this.currentGameInstance) {
+            this.currentGameInstance.destroy();
+            this.currentGameInstance = null;
+        }
+
+        this.showMenuScreen();
+
+        // Re-check assets and update UI (they should still be cached)
+        this.checkAllAssetsReady();
     }
 
     private showGameScreen(): void {

@@ -10,8 +10,10 @@ export class GameStateManager {
     private callbacks: GameCallbacks;
 
     constructor(callbacks: GameCallbacks = {}) {
+        console.log('GameStateManager: Constructor called');
         this.callbacks = callbacks;
         this.state = this.getInitialState();
+        console.log('GameStateManager: Initial level is', this.state.level);
     }
 
     private getInitialState(): GameState {
@@ -41,6 +43,7 @@ export class GameStateManager {
     }
 
     public getLevel(): number {
+        console.log('GameStateManager: getLevel() returning', this.state.level);
         return this.state.level;
     }
 
@@ -73,6 +76,8 @@ export class GameStateManager {
     }
 
     public nextLevel(): boolean {
+        console.log('GameStateManager: nextLevel() called, current level:', this.state.level);
+        console.trace(); // This will show the call stack
         this.state.level++;
         this.callbacks.onLevelChange?.(this.state.level);
 

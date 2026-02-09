@@ -236,7 +236,7 @@ export class PlayerController {
 
         const mobile = this.mobileInput;
         const speed = CONFIG.PLAYER_SPEED || 200;
-        const jumpForce = CONFIG.JUMP_FORCE || -400;
+        const jumpForce = CONFIG.JUMP_FORCE || -800;
 
         // Horizontal movement
         if (this.cursors.left.isDown || mobile.left) {

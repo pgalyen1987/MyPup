@@ -25,6 +25,10 @@ if (typeof Phaser === 'undefined') {
 }
 
 export class Game {
+    // ==================================================================================
+    // PROPERTIES
+    // ==================================================================================
+
     // Services
     private readonly spriteSheetUrl: string;
     private readonly apiService: APIService;
@@ -43,7 +47,16 @@ export class Game {
     private animationManager: AnimationManager | null = null;
     private enemyManager: EnemyManager | null = null;
 
+    // State flags
+    private isCreating: boolean = true;
+    private isDestroyed: boolean = false;
+
+    // Public reference
     public gameInstance: Game;
+
+    // ==================================================================================
+    // CONSTRUCTOR
+    // ==================================================================================
 
     constructor(
         spriteSheetUrl: string,
@@ -59,6 +72,8 @@ export class Game {
         this.apiService = apiService;
         this.assetStorage = assetStorage;
         this.gameInstance = this;
+        this.isCreating = true;
+        this.isDestroyed = false;
 
         // Initialize state manager with callbacks
         this.stateManager = new GameStateManager({
@@ -77,7 +92,8 @@ export class Game {
     // ==================================================================================
 
     private initializePhaser(): void {
-        const self = this;
+        // Use arrow functions to properly capture 'this' and receive 'scene' from Phaser
+        const gameInstance = this;
 
         const config = {
             type: Phaser.AUTO,
@@ -92,9 +108,15 @@ export class Game {
                 },
             },
             scene: {
-                preload: function (this: PhaserScene): void { self.preload(this); },
-                create: function (this: PhaserScene): void { self.create(this); },
-                update: function (this: PhaserScene): void { self.update(this); },
+                preload: function(this: PhaserScene) {
+                    gameInstance.preload(this);
+                },
+                create: function(this: PhaserScene) {
+                    gameInstance.create(this);
+                },
+                update: function(this: PhaserScene) {
+                    gameInstance.update(this);
+                },
             },
             pixelArt: true,
             backgroundColor: '#87CEEB',
@@ -108,15 +130,22 @@ export class Game {
     // ==================================================================================
 
     private preload(scene: PhaserScene): void {
+        if (this.isDestroyed) return;
+
         console.log('Game: Preload started');
         this.currentScene = scene;
 
         try {
             scene.load.image('player', this.spriteSheetUrl);
 
-            scene.load.on('complete', () => console.log('Game: Asset loading complete'));
+            scene.load.on('complete', () => {
+                if (!this.isDestroyed) {
+                    console.log('Game: Asset loading complete');
+                }
+            });
+
             scene.load.on('loaderror', (file: { key: string }) => {
-                if (file.key === 'player') {
+                if (file.key === 'player' && !this.isDestroyed) {
                     this.handleCriticalError('Player sprite failed to load');
                 }
             });
@@ -126,11 +155,21 @@ export class Game {
     }
 
     private async create(scene: PhaserScene): Promise<void> {
+        if (this.isDestroyed) return;
+
+        // CRITICAL: Set creating flag immediately
+        this.isCreating = true;
+        this.currentScene = scene;
+
         try {
             console.log('Game: Create started');
-            this.currentScene = scene;
 
-            // Initialize managers
+            // Validate scene is ready
+            if (!scene || !scene.textures || !scene.physics) {
+                throw new Error('Scene not fully initialized');
+            }
+
+            // Initialize managers with the scene
             this.uiManager = new UIManager(scene);
             this.animationManager = new AnimationManager(scene);
             this.backgroundManager = new BackgroundManager(scene, this.assetStorage);
@@ -139,12 +178,16 @@ export class Game {
 
             // Load background
             await this.backgroundManager.load();
+            if (this.isDestroyed) return;
 
             // Setup player
             await this.playerController.setupSprite(this.spriteSheetUrl);
+            if (this.isDestroyed) return;
 
             // Create level
-            this.levelManager.createLevel(this.stateManager.getLevel());
+            const currentLevel = this.stateManager.getLevel();
+            console.log('Creating initial level:', currentLevel);
+            this.levelManager.createLevel(currentLevel);
 
             // Setup player physics and input
             this.playerController.setupPhysics(this.levelManager.getPlatforms());
@@ -156,11 +199,12 @@ export class Game {
             // Setup collectible collision
             const player = this.playerController.getSprite();
             if (player) {
-                this.levelManager.setupPlayerCollision(player, this.onCollectItem.bind(this));
+                this.levelManager.setupPlayerCollision(player, this.handleCollectItem);
             }
 
             // Initialize enemies
             await this.initializeEnemies(scene);
+            if (this.isDestroyed) return;
 
             // Setup camera
             this.setupCamera(scene);
@@ -178,43 +222,110 @@ export class Game {
             console.log('Game: Create finished successfully');
 
         } catch (error) {
-            this.handleCriticalError(error instanceof Error ? error.message : 'Create error');
+            if (!this.isDestroyed) {
+                this.handleCriticalError(error instanceof Error ? error.message : 'Create error');
+            }
+        } finally {
+            // CRITICAL: Only allow update() to run after create() is fully complete
+            this.isCreating = false;
         }
     }
 
-    private update(_scene: PhaserScene): void {
-        if (this.stateManager.isGameOver() || this.stateManager.isPaused()) return;
+    private update(scene: PhaserScene): void {
+        // Guard clauses - don't run update if not ready
+        if (this.isDestroyed) return;
+        if (this.isCreating) return;
+        if (!this.currentScene) return;
+        if (this.stateManager.isGameOver()) return;
+        if (this.stateManager.isPaused()) return;
+
+        // Additional safety check
+        if (!this.levelManager || !this.playerController) return;
 
         // Update player
-        this.playerController?.update();
+        this.playerController.update();
 
         // Update enemies
         try {
             this.enemyManager?.update();
         } catch (e) {
-            // Silently handle
+            // Silently handle enemy update errors
         }
 
-        // Check if fallen
-        if (this.playerController?.isFallenOffWorld()) {
+        // Check if player fell off world
+        if (this.playerController.isFallenOffWorld()) {
             this.handlePlayerDamage();
+            return;
         }
 
-        // Check level complete
-        const collectiblesLeft = this.levelManager?.getActiveCollectibleCount() ?? 0;
-        const enemiesLeft = this.enemyManager?.getActiveCount() ?? 0;
+        // Check level complete condition
+        this.checkLevelComplete();
+    }
 
+    // ==================================================================================
+    // LEVEL MANAGEMENT
+    // ==================================================================================
+
+    private checkLevelComplete(): void {
+        if (this.isCreating || this.isDestroyed) return;
+
+        const collectiblesLeft = this.levelManager?.getActiveCollectibleCount() ?? -1;
+        const enemiesLeft = this.enemyManager?.getActiveCount() ?? -1;
+
+        // Only advance if we have valid counts (not default -1)
         if (collectiblesLeft === 0 && enemiesLeft === 0) {
             this.advanceLevel();
         }
     }
 
+    private advanceLevel(): void {
+        if (this.stateManager.isGameOver()) return;
+        if (this.isCreating) return;
+        if (this.isDestroyed) return;
+
+        const canContinue = this.stateManager.nextLevel();
+        if (!canContinue) return;
+
+        this.stateManager.setPaused(true);
+
+        this.uiManager?.showLevelTransition(this.stateManager.getLevel(), async () => {
+            if (this.isDestroyed) return;
+
+            this.stateManager.setPaused(false);
+
+            // Clear and recreate level
+            this.enemyManager?.clearAll();
+            this.levelManager?.createLevel(this.stateManager.getLevel());
+
+            // Reset player
+            this.playerController?.resetPosition();
+
+            // Setup collisions
+            const player = this.playerController?.getSprite();
+            if (player) {
+                this.levelManager?.setupPlayerCollision(player, this.handleCollectItem);
+            }
+
+            // Spawn enemies
+            try {
+                await this.enemyManager?.preloadSprites(this.stateManager.getLevel(), true);
+                this.enemyManager?.spawnLevel(this.stateManager.getLevel());
+                if (player) {
+                    this.enemyManager?.setPlayer(player);
+                }
+            } catch (e) {
+                console.warn('Failed to load enemies for new level:', e);
+            }
+        });
+    }
+
     // ==================================================================================
-    // ENEMY INITIALIZATION
+    // ENEMY MANAGEMENT
     // ==================================================================================
 
     private async initializeEnemies(scene: PhaserScene): Promise<void> {
         this.enemyManager = new EnemyManager(scene, this.apiService);
+
         this.enemyManager.setCallbacks({
             onEnemyKilled: (enemy: Enemy) => this.onEnemyKilled(enemy),
             onPlayerHit: (enemy: Enemy) => this.onPlayerHit(enemy),
@@ -226,8 +337,12 @@ export class Game {
         }
 
         try {
-            await this.enemyManager.preloadSprites(this.stateManager.getLevel(), true);
-            this.enemyManager.spawnLevel(this.stateManager.getLevel());
+            const currentLevel = this.stateManager.getLevel();
+            await this.enemyManager.preloadSprites(currentLevel, true);
+
+            if (!this.isDestroyed) {
+                this.enemyManager.spawnLevel(currentLevel);
+            }
         } catch (e) {
             console.warn('Enemy loading issue:', e);
         }
@@ -239,6 +354,7 @@ export class Game {
 
     private setupCamera(scene: PhaserScene): void {
         const worldWidth = CONFIG.GAME_WIDTH * 3;
+
         scene.cameras.main.setBounds(0, 0, worldWidth, CONFIG.GAME_HEIGHT);
         scene.physics.world.setBounds(0, 0, worldWidth, CONFIG.GAME_HEIGHT, true, true, true, true);
 
@@ -249,86 +365,51 @@ export class Game {
     }
 
     // ==================================================================================
-    // GAME EVENTS
+    // GAME EVENTS (Arrow functions to preserve 'this' context)
     // ==================================================================================
 
-    private onCollectItem(_player: PhaserSprite, item: PhaserSprite): void {
+    private handleCollectItem = (_player: PhaserSprite, item: PhaserSprite): void => {
+        if (this.isDestroyed) return;
+
         item.disableBody(true, true);
         this.stateManager.addScore(10);
         this.uiManager?.createScorePopup(item.x, item.y, '+10');
-    }
+    };
 
     private onEnemyKilled(enemy: Enemy): void {
-        this.stateManager.addScore(enemy.getScoreValue());
+        if (this.isDestroyed) return;
+
+        const scoreValue = enemy.getScoreValue();
+        this.stateManager.addScore(scoreValue);
+
         this.uiManager?.createScorePopup(
             enemy.sprite?.x || 0,
             enemy.sprite?.y || 0,
-            `+${enemy.getScoreValue()}`
+            `+${scoreValue}`
         );
 
-        if (enemy.type === 'mailman') {
-            this.currentScene?.cameras.main.shake(400, 0.03);
-        } else {
-            this.currentScene?.cameras.main.shake(100, 0.005);
-        }
+        // Camera shake based on enemy type
+        const shakeIntensity = enemy.type === 'mailman' ? 0.03 : 0.005;
+        const shakeDuration = enemy.type === 'mailman' ? 400 : 100;
+        this.currentScene?.cameras.main.shake(shakeDuration, shakeIntensity);
     }
 
     private onPlayerHit(enemy: Enemy): void {
+        if (this.isDestroyed) return;
+
         if (!this.playerController?.isInvulnerable()) {
             this.handlePlayerDamage(enemy.config.damage);
         }
     }
 
     private handlePlayerDamage(damage: number = 1): void {
+        if (this.isDestroyed) return;
+
         this.playerController?.resetPosition();
         this.playerController?.takeDamage();
         this.currentScene?.cameras.main.shake(300, 0.02);
 
-        const isDead = this.stateManager.loseLife(damage);
-        if (!isDead) {
-            // Player still alive, continue
-        }
-    }
-
-    // ==================================================================================
-    // LEVEL PROGRESSION
-    // ==================================================================================
-
-    private advanceLevel(): void {
-        if (this.stateManager.isGameOver()) return;
-
-        const canContinue = this.stateManager.nextLevel();
-        if (!canContinue) return; // Win condition handled by state manager
-
-        this.stateManager.setPaused(true);
-
-        this.uiManager?.showLevelTransition(this.stateManager.getLevel(), async () => {
-            this.stateManager.setPaused(false);
-
-            // Recreate level
-            this.enemyManager?.clearAll();
-            this.levelManager?.createLevel(this.stateManager.getLevel());
-
-            // Reset player
-            this.playerController?.resetPosition();
-
-            // Setup collisions
-            const player = this.playerController?.getSprite();
-            if (player) {
-                this.levelManager?.setupPlayerCollision(player, this.onCollectItem.bind(this));
-            }
-
-            // Spawn enemies
-            try {
-                await this.enemyManager?.preloadSprites(this.stateManager.getLevel(), true);
-                this.enemyManager?.spawnLevel(this.stateManager.getLevel());
-                if (player) {
-                    this.enemyManager?.setPlayer(player);
-                }
-            } catch (e) {
-                console.warn('Failed to load enemies:', e);
-            }
-        });
+        this.stateManager.loseLife(damage);
     }
 
     // ==================================================================================
@@ -336,16 +417,21 @@ export class Game {
     // ==================================================================================
 
     private handleGameOver(score: number): void {
+        if (this.isDestroyed) return;
+
         this.currentScene?.physics.pause();
         this.uiManager?.showGameOver(score, () => this.restartGame());
     }
 
     private handleWin(score: number): void {
+        if (this.isDestroyed) return;
+
         this.currentScene?.physics.pause();
         this.uiManager?.showWin(score, () => this.restartGame());
     }
 
     public togglePause(): void {
+        if (this.isDestroyed) return;
         if (this.stateManager.isGameOver()) return;
 
         const isPaused = this.stateManager.togglePause();
@@ -367,8 +453,15 @@ export class Game {
     public restartGame(): void {
         this.destroy();
         this.uiManager?.removeAllOverlays();
-        document.getElementById('menu-screen')?.classList.remove('hidden');
-        document.getElementById('game-screen')?.classList.add('hidden');
+
+        // Use characterManager's returnToMenu if available
+        const cm = (window as any).characterManager;
+        if (cm?.returnToMenu) {
+            cm.returnToMenu();
+        } else {
+            document.getElementById('menu-screen')?.classList.remove('hidden');
+            document.getElementById('game-screen')?.classList.add('hidden');
+        }
     }
 
     // ==================================================================================
@@ -376,7 +469,13 @@ export class Game {
     // ==================================================================================
 
     private handleCriticalError(message: string): void {
+        if (this.isDestroyed) return;
+
         console.error('CRITICAL ERROR:', message);
+
+        // Set flags to stop all processing
+        this.isCreating = true; // Prevent update from running
+        this.isDestroyed = true;
 
         errorHandler.createError(
             ErrorType.ASSET_LOAD_ERROR,
@@ -400,7 +499,16 @@ export class Game {
     // ==================================================================================
 
     public updateBackground(): void {
+        if (this.isDestroyed) return;
         this.backgroundManager?.refresh();
+    }
+
+    public getStateManager(): GameStateManager {
+        return this.stateManager;
+    }
+
+    public isGameCreating(): boolean {
+        return this.isCreating;
     }
 
     // ==================================================================================
@@ -408,13 +516,32 @@ export class Game {
     // ==================================================================================
 
     public destroy(): void {
+        if (this.isDestroyed) return;
+
         console.log('Game: Cleaning up...');
 
-        this.backgroundManager?.destroy();
-        this.enemyManager?.destroy();
-        this.levelManager?.destroy();
-        this.playerController?.destroy();
+        // Set flags first to stop all processing
+        this.isDestroyed = true;
+        this.isCreating = true;
 
+        // Destroy managers
+        try {
+            this.backgroundManager?.destroy();
+        } catch (e) { /* ignore */ }
+
+        try {
+            this.enemyManager?.destroy();
+        } catch (e) { /* ignore */ }
+
+        try {
+            this.levelManager?.destroy();
+        } catch (e) { /* ignore */ }
+
+        try {
+            this.playerController?.destroy();
+        } catch (e) { /* ignore */ }
+
+        // Clear references
         this.backgroundManager = null;
         this.enemyManager = null;
         this.levelManager = null;
@@ -423,9 +550,13 @@ export class Game {
         this.animationManager = null;
         this.currentScene = null;
 
-        this.game?.destroy(true);
+        // Destroy Phaser game
+        try {
+            this.game?.destroy(true);
+        } catch (e) { /* ignore */ }
         this.game = null;
 
+        // Reset state
         this.stateManager.reset();
 
         console.log('Game: Destroyed');
@@ -433,7 +564,7 @@ export class Game {
 }
 
 // ==================================================================================
-// GLOBAL PAUSE BUTTON
+// GLOBAL PAUSE BUTTON HANDLER
 // ==================================================================================
 
 if (typeof window !== 'undefined') {

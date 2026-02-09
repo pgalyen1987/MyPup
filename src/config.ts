@@ -180,7 +180,7 @@ export const CONFIG: GameConfig = {
     GAME_HEIGHT: 1024,
     GRAVITY: 1600,
     PLAYER_SPEED: 220,
-    JUMP_FORCE: -650,
+    JUMP_FORCE: -850,
 
     SPRITE_SHEET_WIDTH: 4,
     SPRITE_SHEET_HEIGHT: 4,

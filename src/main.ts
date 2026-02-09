@@ -37,6 +37,14 @@ interface LoadingProgress {
 }
 
 // ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const SESSION_MARKER_KEY = 'mypup_session_active';
+const CACHE_VERSION_KEY = 'mypup_cache_version';
+const CURRENT_CACHE_VERSION = '1'; // Increment this to force cache clear on deploy
+
+// ============================================================================
 // LOADING STATE
 // ============================================================================
 
@@ -76,6 +84,86 @@ if (typeof window !== 'undefined') {
     (window as any).retryBackgroundGeneration = retryBackgroundGeneration;
     (window as any).retrySpriteGeneration = retrySpriteGeneration;
     (window as any).getLoadingProgress = () => loadingProgress;
+    (window as any).forceHardReload = forceHardReload;
+}
+
+// ============================================================================
+// RELOAD DETECTION
+// ============================================================================
+
+/**
+ * Determines if this is a hard reload (cache should be cleared) or soft reload
+ *
+ * Hard reload scenarios:
+ * - First visit to the site
+ * - Ctrl+Shift+R / Shift+F5
+ * - Browser cache cleared
+ * - New browser session (all tabs closed)
+ * - Cache version mismatch (new deployment)
+ *
+ * Soft reload scenarios:
+ * - Regular refresh (F5 / Ctrl+R)
+ * - Navigation back to page
+ * - Game over -> return to menu -> start again
+ */
+function isHardReload(): boolean {
+    // Check 1: Cache version mismatch (new deployment)
+    const storedVersion = localStorage.getItem(CACHE_VERSION_KEY);
+    if (storedVersion !== CURRENT_CACHE_VERSION) {
+        console.log('Cache version mismatch - treating as hard reload');
+        localStorage.setItem(CACHE_VERSION_KEY, CURRENT_CACHE_VERSION);
+        return true;
+    }
+
+    // Check 2: Session marker doesn't exist (new session or hard reload)
+    const sessionMarker = sessionStorage.getItem(SESSION_MARKER_KEY);
+    if (!sessionMarker) {
+        console.log('No session marker found - treating as hard reload');
+        return true;
+    }
+
+    // Check 3: Use Performance API to detect reload type
+    if (typeof performance !== 'undefined' && performance.getEntriesByType) {
+        const navEntries = performance.getEntriesByType('navigation') as PerformanceNavigationTiming[];
+        if (navEntries.length > 0) {
+            const navType = navEntries[0].type;
+
+            // 'reload' with no session marker = hard reload
+            // 'navigate' = new navigation
+            // 'back_forward' = browser back/forward
+            if (navType === 'navigate') {
+                console.log('New navigation detected');
+                // Could be hard reload or first visit
+                // Session marker check above handles this
+            }
+        }
+    }
+
+    // Check 4: Legacy Navigation Timing API (fallback)
+    if (typeof performance !== 'undefined' && (performance as any).navigation) {
+        const navType = (performance as any).navigation.type;
+        // TYPE_RELOAD = 1, but we can't distinguish hard vs soft with this alone
+    }
+
+    console.log('Session marker exists - treating as soft reload');
+    return false;
+}
+
+/**
+ * Set the session marker to indicate an active session
+ */
+function setSessionMarker(): void {
+    sessionStorage.setItem(SESSION_MARKER_KEY, Date.now().toString());
+}
+
+/**
+ * Force a hard reload - clears session marker and reloads
+ */
+function forceHardReload(): void {
+    console.log('Forcing hard reload...');
+    sessionStorage.removeItem(SESSION_MARKER_KEY);
+    localStorage.removeItem(CACHE_VERSION_KEY);
+    window.location.reload();
 }
 
 // ============================================================================
@@ -156,15 +244,25 @@ function isLoadingComplete(): boolean {
 }
 
 // ============================================================================
-// CACHE CLEARING ON RELOAD
+// CACHE MANAGEMENT
 // ============================================================================
 
 async function clearAllCachesOnLoad(): Promise<void> {
     console.log('🧹 Clearing all cached assets for fresh generation...');
 
-    // Clear ALL localStorage to avoid quota issues
+    // Clear ALL localStorage except session/version markers
     try {
-        localStorage.clear();
+        const keysToPreserve = [SESSION_MARKER_KEY, CACHE_VERSION_KEY, 'debug_mode'];
+        const keysToRemove: string[] = [];
+
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && !keysToPreserve.includes(key)) {
+                keysToRemove.push(key);
+            }
+        }
+
+        keysToRemove.forEach(key => localStorage.removeItem(key));
         console.log('✓ localStorage cleared');
     } catch (e) {
         console.warn('Could not clear localStorage:', e);
@@ -194,7 +292,74 @@ async function clearAllCachesOnLoad(): Promise<void> {
     // Reset the file input
     resetFileInput();
 
+    // Reset loading progress
+    loadingProgress.background = false;
+    loadingProgress.enemies.cat = false;
+    loadingProgress.enemies.bird = false;
+    loadingProgress.enemies.squirrel = false;
+    loadingProgress.enemies.mailman = false;
+    loadingProgress.completedSteps = 0;
+
+    // Reset generation flags
+    backgroundGenerationStarted = false;
+    enemyGenerationStarted = false;
+
     console.log('✓ All caches cleared');
+}
+
+/**
+ * Check if we have valid cached assets that can be reused
+ */
+async function checkForValidCachedAssets(): Promise<boolean> {
+    try {
+        // Check for cached background
+        const backgroundFrames = localStorage.getItem('location_background_frames');
+        if (!backgroundFrames) {
+            console.log('No cached background found');
+            return false;
+        }
+
+        const frames = JSON.parse(backgroundFrames);
+        if (!Array.isArray(frames) || frames.length < 8) {
+            console.log('Cached background invalid or incomplete');
+            return false;
+        }
+
+        // Check for cached enemy sprites
+        const enemyTypes = ['cat', 'bird', 'squirrel', 'mailman'];
+        let hasAllEnemies = true;
+
+        for (const type of enemyTypes) {
+            const sprite = localStorage.getItem(`enemy_${type}_spritesheet`);
+            if (!sprite || sprite.length < 1000) {
+                console.log(`Missing or invalid cached sprite for ${type}`);
+                hasAllEnemies = false;
+                break;
+            }
+        }
+
+        if (!hasAllEnemies) {
+            return false;
+        }
+
+        console.log('✓ Found valid cached assets');
+        return true;
+    } catch (error) {
+        console.warn('Error checking cached assets:', error);
+        return false;
+    }
+}
+
+/**
+ * Mark all assets as loaded from cache
+ */
+function markAssetsAsLoaded(): void {
+    loadingProgress.background = true;
+    loadingProgress.enemies.cat = true;
+    loadingProgress.enemies.bird = true;
+    loadingProgress.enemies.squirrel = true;
+    loadingProgress.enemies.mailman = true;
+    loadingProgress.completedSteps = loadingProgress.totalSteps;
 }
 
 function clearUploadPreview(): void {
@@ -374,20 +539,51 @@ async function initializeApp(): Promise<void> {
     console.log('Initializing App...');
 
     try {
-        // Show loading screen
-        showLoadingScreen();
-        updateLoadingUI();
+        // Set session marker AFTER checking reload type
+        const hardReload = isHardReload();
+        setSessionMarker();
 
-        // Clear all caches first for fresh generation
-        await clearAllCachesOnLoad();
+        if (hardReload) {
+            // Hard reload - clear everything and regenerate
+            console.log('🔄 Hard reload detected - clearing caches');
+            showLoadingScreen();
+            updateLoadingUI();
+            await clearAllCachesOnLoad();
+        } else {
+            // Soft reload - check for valid cached assets
+            const hasValidCache = await checkForValidCachedAssets();
+
+            if (hasValidCache) {
+                // Use cached assets - skip loading screen
+                console.log('✓ Using cached assets from previous session');
+                markAssetsAsLoaded();
+                updateLoadingUI();
+                hideLoadingScreen();
+
+                // Initialize config without triggering regeneration
+                await initializeConfig(apiService, () => {
+                    // Don't regenerate - we have cached assets
+                    console.log('Skipping asset generation - using cache');
+                });
+
+                console.log('✓ App initialization complete (from cache)');
+                console.log('📷 Upload a dog image or click Start Game if you have a saved character');
+                return;
+            } else {
+                // No valid cache - need to generate
+                console.log('No valid cache found - generating assets');
+                showLoadingScreen();
+                updateLoadingUI();
+                await clearAllCachesOnLoad();
+            }
+        }
 
         // Initialize config
         await initializeConfig(apiService, generateLocationBackground);
 
         // Verify backend connection and start asset generation
         if (CONFIG.USE_BACKEND_PROXY && CONFIG.BACKEND_API_URL) {
-            // updateApiKeyStatus may call generateLocationBackground via callback
-            // So we DON'T call it again after this
+            // updateApiKeyStatus will call generateLocationBackground via callback
             await updateApiKeyStatus(apiService, generateLocationBackground);
 
             // Only start enemy generation here (background is started by updateApiKeyStatus)
@@ -465,35 +661,8 @@ async function clearBackgroundCache(): Promise<void> {
 async function clearAllCaches(): Promise<void> {
     console.log('Clearing all caches...');
 
-    // Clear localStorage
-    localStorage.clear();
-
-    // Clear AssetStorage
-    try {
-        const keys = [
-            'location_background_frames',
-            'location_background_meta',
-            'location_background',
-            'custom_sprite_sheet',
-            'original_dog_image',
-        ];
-
-        for (const key of keys) {
-            await assetStorage.removeItem(key);
-        }
-    } catch (error) {
-        console.warn('Error clearing AssetStorage:', error);
-    }
-
-    // Clear upload preview and file input
-    clearUploadPreview();
-    resetFileInput();
-
-    // Reset generation flags
-    backgroundGenerationStarted = false;
-    enemyGenerationStarted = false;
-
-    console.log('All caches cleared. Refresh the page.');
+    // Use the forceHardReload to ensure clean state
+    forceHardReload();
 }
 
 async function retryBackgroundGeneration(): Promise<void> {
@@ -566,4 +735,5 @@ export {
     clearBackgroundCache,
     clearAllCaches,
     getAssetStatus,
+    forceHardReload,
 };
