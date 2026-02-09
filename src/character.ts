@@ -1,626 +1,657 @@
-// Character customization and sprite management
+/**
+ * character.ts
+ * Manages character customization, image uploading, sprite generation via Gemini,
+ * and game state initialization.
+ */
 
-// Type definitions
-import type { APIService } from './api.js';
+import type { APIService } from './api/api.js';
 import type { AssetStorage } from './AssetStorage.js';
-import type { Game } from './game.js';
+import { Game } from './game/Game.js';
 import { CONFIG } from './config.js';
 
-// Extend Window interface for global objects (extends config.ts declarations)
-declare global {
-    interface Window {
-        assetStorage?: {
-            getItem(key: string): Promise<string | undefined>;
-            setItem(key: string, value: string): Promise<void>;
-        };
-        testGeminiModels?: () => Promise<void>;
-        gameInstance?: any; // Will be typed when game.ts is migrated
-        Game?: any; // Will be typed when game.ts is migrated
-    }
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+interface RetryConfig {
+    readonly MAX_ATTEMPTS: number;
+    readonly INITIAL_DELAY_MS: number;
+    readonly MAX_DELAY_MS: number;
+    readonly BACKOFF_MULTIPLIER: number;
 }
 
+interface ReadyState {
+    sprite: boolean;
+    background: boolean;
+    canStart: boolean;
+}
+
+type GameClass = typeof Game;
+
+if (window.updateDebugIndicators) {
+    window.updateDebugIndicators();
+}
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const RETRY_CONFIG: RetryConfig = {
+    MAX_ATTEMPTS: 5,
+    INITIAL_DELAY_MS: 2000,
+    MAX_DELAY_MS: 30000,
+    BACKOFF_MULTIPLIER: 2,
+} as const;
+
+const BACKGROUND_POLL_CONFIG = {
+    MAX_ATTEMPTS: 60,
+    INTERVAL_MS: 5000,
+    MIN_FRAMES_REQUIRED: 8,
+} as const;
+
+// ============================================================================
+// CHARACTER MANAGER CLASS
+// ============================================================================
+
 export class CharacterManager {
-    private apiService: APIService;
-    private assetStorage: AssetStorage;
-    private gameClass: typeof Game;
-    private currentGameInstance: Game | null = null;
+    private readonly apiService: APIService;
+    private readonly assetStorage: AssetStorage;
+    private readonly gameClass: GameClass;
+
+    // State
+    public currentGameInstance: Game | null = null;
     private currentSpriteSheet: string | null = null;
     private uploadedImage: string | null = null;
-    private imageBase64?: string;
 
-    constructor(apiService: APIService, assetStorage: AssetStorage, gameClass: typeof Game) {
+    // Ready state tracking
+    private spriteReady: boolean = false;
+    private backgroundReady: boolean = false;
+    private isGeneratingSprite: boolean = false;
+    private isCheckingBackground: boolean = false;
+
+    constructor(
+        apiService: APIService,
+        assetStorage: AssetStorage,
+        gameClass: GameClass
+    ) {
         this.apiService = apiService;
         this.assetStorage = assetStorage;
         this.gameClass = gameClass;
         this.setupEventListeners();
     }
 
-    setupEventListeners(): void {
-        const uploadInput = document.getElementById('dog-image-upload');
-        const startBtn = document.getElementById('start-game-btn');
+    // ==================================================================================
+    // INITIALIZATION
+    // ==================================================================================
+
+    private setupEventListeners(): void {
+        const uploadInput = document.getElementById('dog-image-upload') as HTMLInputElement | null;
+        const startBtn = document.getElementById('start-game-btn') as HTMLButtonElement | null;
 
         if (uploadInput) {
-            uploadInput.addEventListener('change', (e) => this.handleImageUpload(e as Event));
+            uploadInput.addEventListener('change', (e: Event) => this.handleImageUpload(e));
         }
         if (startBtn) {
             startBtn.addEventListener('click', () => this.startGame());
         }
     }
 
-    async handleImageUpload(event: Event): Promise<void> {
+    // ==================================================================================
+    // STORAGE HELPERS
+    // ==================================================================================
+
+    private async getStoredItem(key: string): Promise<string | null> {
+        try {
+            const asset = await this.assetStorage.getItem(key);
+            if (asset) return asset;
+        } catch {
+            // Ignore storage errors, fall through to localStorage
+        }
+
+        return localStorage.getItem(key);
+    }
+
+    private async setStoredItem(key: string, value: string): Promise<void> {
+        try {
+            await this.assetStorage.setItem(key, value);
+        } catch (error) {
+            console.warn(`Failed to save to AssetStorage, using localStorage: ${key}`, error);
+        }
+
+        try {
+            localStorage.setItem(key, value);
+        } catch (error) {
+            console.warn(`Failed to save to localStorage: ${key}`, error);
+        }
+    }
+
+    private async removeStoredItem(key: string): Promise<void> {
+        try {
+            await this.assetStorage.removeItem(key);
+        } catch {
+            // Ignore errors
+        }
+        localStorage.removeItem(key);
+    }
+
+    // ==================================================================================
+    // IMAGE UPLOAD & SPRITE GENERATION
+    // ==================================================================================
+
+    public async handleImageUpload(event: Event): Promise<void> {
         const target = event.target as HTMLInputElement;
         const file = target.files?.[0];
+
         if (!file) return;
 
-        // Validate file type
         if (!file.type.startsWith('image/')) {
             alert('Please upload an image file');
             return;
         }
 
-        // Clear old sprite cache when new image is uploaded
         console.log('New image uploaded - clearing old sprite cache...');
-        try {
-            await this.assetStorage.removeItem('custom_sprite_sheet');
-            await this.assetStorage.removeItem('original_dog_image');
-            localStorage.removeItem('custom_sprite_sheet');
-            localStorage.removeItem('original_dog_image');
-            localStorage.removeItem('has_custom_character');
-            this.currentSpriteSheet = null;
-            console.log('Old sprite cache cleared');
-        } catch (error) {
-            console.warn('Failed to clear old cache:', error);
-        }
 
-        // Show preview
-        const preview = document.getElementById('upload-preview');
+        // Reset ready state
+        this.spriteReady = false;
+        this.currentSpriteSheet = null;
+        this.updateStartButton();
+
+        // Clear old cache
+        await this.clearSpriteCache();
+
+        // Read and process the file
         const reader = new FileReader();
-        
-        reader.onload = async (e) => {
-            const result = (e.target as FileReader).result as string;
-            if (preview) {
-                preview.innerHTML = `<img src="${result}" alt="Dog preview" class="pixelated">`;
+
+        reader.onload = async (e: ProgressEvent<FileReader>) => {
+            const result = e.target?.result as string;
+
+            if (!result) {
+                console.error('Failed to read uploaded file');
+                return;
             }
+
+            this.updatePreviewHTML(result, 'Dog preview');
             this.uploadedImage = result;
-            
-            // Automatically start sprite sheet generation with new image
-            await this.generateSpriteSheet();
+            await this.generateSpriteSheetWithRetry();
+        };
+
+        reader.onerror = () => {
+            console.error('Error reading file');
+            const statusEl = document.getElementById('generation-status');
+            this.updateStatus(statusEl, '❌ Error reading file. Please try again.', '#ff6b6b');
         };
 
         reader.readAsDataURL(file);
     }
 
-    async generateSpriteSheet(): Promise<void> {
-        if (!this.uploadedImage) {
-            return;
+    public clearUploadedImage(): void {
+        this.uploadedImage = null;
+        this.currentSpriteSheet = null;
+        this.spriteReady = false;
+        this.updateStartButton();
+    }
+
+    private async clearSpriteCache(): Promise<void> {
+        const keysToRemove = [
+            'custom_sprite_sheet',
+            'original_dog_image',
+            'has_custom_character',
+        ];
+
+        for (const key of keysToRemove) {
+            await this.removeStoredItem(key);
         }
+    }
+
+    public async generateSpriteSheetWithRetry(): Promise<void> {
+        if (!this.uploadedImage || this.isGeneratingSprite) return;
 
         const statusEl = document.getElementById('generation-status');
-        const startBtn = document.getElementById('start-game-btn') as HTMLButtonElement | null;
-        
-        // Disable start button and show loading
-        if (startBtn) {
-            startBtn.disabled = true;
-        }
-        if (statusEl) {
-            statusEl.innerHTML = '<div class="loader"></div> Analyzing your dog\'s features with Gemini AI...';
-            statusEl.style.color = '#ffd700';
-        }
-        
-        // Smart Caching Check
-        let savedImage: string | undefined, savedSprite: string | undefined;
-        savedImage = await this.assetStorage.getItem('original_dog_image') as string | undefined;
-        savedSprite = await this.assetStorage.getItem('custom_sprite_sheet') as string | undefined;
-        
-        // Fallback to localStorage if AssetStorage doesn't have it
-        if (!savedImage) {
-            savedImage = localStorage.getItem('original_dog_image') || undefined;
-        }
-        if (!savedSprite) {
-            savedSprite = localStorage.getItem('custom_sprite_sheet') || undefined;
-        }
-        
-        // If the uploaded image matches the saved one, and we have a sprite, use it!
-        // NOTE: Cached sprite sheets should already have background removed (if generated after the fix)
-        // If you see green background, clear cache and regenerate
-        if (this.uploadedImage === savedImage && savedSprite) {
-            console.log('Using cached sprite sheet for identical image.');
-            console.log('⚠️ If you see green background, run clearPlayerSpriteCache() and regenerate');
-            this.currentSpriteSheet = savedSprite;
-            await this.checkReadyState();
+
+        // Check cache first
+        const isCacheValid = await this.checkSpriteCache();
+        if (isCacheValid) {
+            await this.checkAllAssetsReady();
             return;
         }
 
-        try {
-            // Use the uploaded image (already in base64 format from FileReader)
-            const imageBase64 = this.uploadedImage;
-            
-            // Verify we have the image
-            if (!imageBase64) {
-                throw new Error('No image data available');
-            }
-            
-            console.log('Generating sprite sheet with uploaded image, base64 length:', imageBase64.length);
-            console.log('Image preview (first 100 chars):', imageBase64.substring(0, 100));
-            
-            // Generate sprite sheet
-            if (statusEl) {
-                statusEl.innerHTML = '<div class="loader"></div> Analyzing with Gemini 3 and generating sprite sheet...';
-                statusEl.style.color = '#ffd700';
-            }
-            
-            const spriteSheetUrl = await this.apiService.generateSpriteSheet(
-                'Custom dog character',
-                imageBase64
-            );
+        this.isGeneratingSprite = true;
+        let attempt = 0;
+        let delay = RETRY_CONFIG.INITIAL_DELAY_MS;
 
-            // Load and validate sprite sheet
-            this.currentSpriteSheet = spriteSheetUrl;
-            
-            // Store in IndexedDB (AssetStorage) for persistence
+        while (attempt < RETRY_CONFIG.MAX_ATTEMPTS) {
+            attempt++;
+
             try {
-                await this.assetStorage.setItem('custom_sprite_sheet', spriteSheetUrl);
-                await this.assetStorage.setItem('original_dog_image', this.imageBase64 || this.uploadedImage);
-                localStorage.setItem('has_custom_character', 'true');
-            } catch (storageError) {
-                console.warn('Failed to save character to storage:', storageError);
-                if (statusEl) {
-                    statusEl.textContent += ' (Warning: Could not cache character, but game will work)';
-                }
-            }
-            
-            // Update preview and check if ready to start
-            this.updatePreview(spriteSheetUrl);
-            await this.checkReadyState();
+                this.updateStatus(
+                    statusEl,
+                    `<div class="loader"></div> Generating sprite sheet... (Attempt ${attempt}/${RETRY_CONFIG.MAX_ATTEMPTS})`,
+                    '#ffd700'
+                );
 
-        } catch (error: any) {
-            console.error('Error generating sprite sheet:', error);
-            
-            // Handle structured error objects from API
-            let errorMessage = error.message || 'Unknown error occurred';
-            let showRefreshButton = false;
-            
-            if (error.type) {
-                errorMessage = error.message || errorMessage;
-                
-                // For expired or invalid keys, show backend error
-                if (error.type === 'API_KEY_EXPIRED' || error.type === 'API_KEY_INVALID') {
-                    // Backend proxy handles API keys, so this shouldn't happen
-                    // But if it does, show a generic backend error
-                    errorMessage += '\n\nPlease check your backend configuration.';
-                }
-                
-                // For model not found, suggest refreshing
-                if (error.type === 'MODEL_NOT_FOUND') {
-                    showRefreshButton = true;
-                }
-            }
-            
-            if (statusEl) {
-                statusEl.innerHTML = `❌ Error: ${errorMessage}`;
-                statusEl.style.color = '#ff6b6b';
-                
-                // Add a refresh button for model errors
-                if (showRefreshButton && !document.getElementById('error-refresh-btn')) {
-                    const refreshBtn = document.createElement('button');
-                    refreshBtn.id = 'error-refresh-btn';
-                    refreshBtn.className = 'clear-button';
-                    refreshBtn.textContent = 'Refresh Page';
-                    refreshBtn.style.marginTop = '10px';
-                    refreshBtn.style.background = '#4CAF50';
-                    refreshBtn.onclick = () => {
-                        window.location.reload();
-                    };
-                    statusEl.appendChild(document.createElement('br'));
-                    statusEl.appendChild(refreshBtn);
-                }
-                
-                // Add test models button for model errors
-                if (error.type === 'MODEL_NOT_FOUND' && !document.getElementById('error-test-models-btn')) {
-                    const testBtn = document.createElement('button');
-                    testBtn.id = 'error-test-models-btn';
-                    testBtn.className = 'clear-button';
-                    testBtn.textContent = 'Test Available Models';
-                    testBtn.style.marginTop = '10px';
-                    testBtn.style.background = '#2196F3';
-                    testBtn.onclick = () => {
-                        if (window.testGeminiModels) {
-                            if (statusEl) {
-                                statusEl.innerHTML = 'Testing models... Check browser console (F12) for results.';
-                            }
-                            window.testGeminiModels()!.then(() => {
-                                if (statusEl) {
-                                    statusEl.innerHTML += '<br><br>✅ Test complete! Check console for working models.';
-                                }
-                            }).catch((err: Error) => {
-                                if (statusEl) {
-                                    statusEl.innerHTML += `<br><br>❌ Test error: ${err.message}`;
-                                }
-                            });
-                        } else {
-                            alert('Test script not loaded. Please refresh the page and try again.');
-                        }
-                    };
-                    statusEl.appendChild(document.createElement('br'));
-                    statusEl.appendChild(testBtn);
-                }
-            }
-            
-            // Keep start button disabled on error
-            if (startBtn) {
-                startBtn.disabled = true;
-            }
-        }
-    }
+                console.log(`Sprite generation attempt ${attempt}/${RETRY_CONFIG.MAX_ATTEMPTS}`);
 
-    updatePreview(spriteUrl: string): void {
-        // Show preview
-        const preview = document.getElementById('upload-preview');
-        if (preview) {
-            preview.innerHTML = `
-                <div>
-                    <img src="${spriteUrl}" alt="Sprite sheet" class="pixelated" style="width: 256px; height: 256px;">
-                    <p style="margin-top: 10px; font-size: 0.9em;">Sprite Sheet Ready!</p>
-                </div>
-            `;
-        }
-    }
+                const spriteSheetUrl = await this.apiService.generateSpriteSheet(
+                    'Custom dog character',
+                    this.uploadedImage
+                );
 
-    async checkReadyState(): Promise<void> {
-        const statusEl = document.getElementById('generation-status');
-        const startBtn = document.getElementById('start-game-btn') as HTMLButtonElement | null;
-        
-        console.log('CharacterManager: checkReadyState called');
-        console.log('CharacterManager: currentSpriteSheet:', this.currentSpriteSheet ? 'YES' : 'NO');
-        
-        // Check if sprite sheet is ready
-        if (!this.currentSpriteSheet) {
-            console.log('CharacterManager: Sprite sheet not ready, disabling button');
-            if (statusEl) {
-                statusEl.innerHTML = '<div class="loader"></div> Generating sprite sheet...';
-                statusEl.style.color = '#ffd700';
-            }
-            if (startBtn) {
-                startBtn.disabled = true;
-            }
-            return;
-        }
-        
-        // Check if background is ready (REQUIRED)
-        // Background is ONLY stored as frames array (8 frames, 512x512 each)
-        // We only check for the frames array - no spritesheet fallback
-        let backgroundReady = false;
-        try {
-            // First check AssetStorage for frames array (preferred)
-            const framesStr = await this.assetStorage.getItem('location_background_frames');
-            if (framesStr) {
-                try {
-                    const frames = JSON.parse(framesStr);
-                    backgroundReady = Array.isArray(frames) && frames.length >= 8;
-                    console.log('CharacterManager: Background check via AssetStorage (frames array):', backgroundReady, `(${frames?.length || 0} frames)`);
-                } catch (e) {
-                    console.warn('CharacterManager: Could not parse frames array from AssetStorage:', e);
+                // Validate the result
+                if (!this.isValidSpriteSheet(spriteSheetUrl)) {
+                    throw new Error('Invalid sprite sheet generated (validation failed)');
                 }
-            } else {
-                console.log('CharacterManager: No frames array found in AssetStorage');
-            }
-            
-            // Fallback: Check localStorage for frames array
-            if (!backgroundReady) {
-                const localFramesStr = localStorage.getItem('location_background_frames');
-                if (localFramesStr) {
-                    try {
-                        const frames = JSON.parse(localFramesStr);
-                        backgroundReady = Array.isArray(frames) && frames.length >= 8;
-                        console.log('CharacterManager: Background check via localStorage (frames array):', backgroundReady, `(${frames?.length || 0} frames)`);
-                    } catch (e) {
-                        console.warn('CharacterManager: Could not parse frames array from localStorage:', e);
-                    }
+
+                // Success!
+                await this.handleSpriteGenerationSuccess(spriteSheetUrl);
+                return;
+
+            } catch (error) {
+                console.error(`Sprite generation attempt ${attempt} failed:`, error);
+
+                if (attempt < RETRY_CONFIG.MAX_ATTEMPTS) {
+                    this.updateStatus(
+                        statusEl,
+                        `<div class="loader"></div> Generation failed. Retrying in ${Math.round(delay / 1000)}s... (Attempt ${attempt}/${RETRY_CONFIG.MAX_ATTEMPTS})`,
+                        '#ff9800'
+                    );
+
+                    await this.sleep(delay);
+                    delay = Math.min(delay * RETRY_CONFIG.BACKOFF_MULTIPLIER, RETRY_CONFIG.MAX_DELAY_MS);
                 } else {
-                    console.log('CharacterManager: No frames array found in localStorage');
+                    this.handleSpriteGenerationFailure(statusEl);
                 }
             }
-        } catch (error) {
-            console.error('CharacterManager: Error checking background:', error);
-            backgroundReady = false;
         }
-        
-        console.log('CharacterManager: Background ready:', backgroundReady);
-        
-        if (!backgroundReady) {
-            console.log('CharacterManager: Background not ready, waiting...');
-            if (statusEl) {
-                statusEl.innerHTML = '<div class="loader"></div> Waiting for background to be ready...';
-                statusEl.style.color = '#ffd700';
-            }
-            if (startBtn) {
-                startBtn.disabled = true;
-            }
-            
-            // Wait a bit and check again (background might be generating)
-            // But limit retries to avoid infinite loop
-            const retryCount = (this as any)._backgroundRetryCount || 0;
-            if (retryCount < CONFIG.TIMING.MAX_BACKGROUND_RETRY_ATTEMPTS) { // Max retries configured in CONFIG
-                (this as any)._backgroundRetryCount = retryCount + 1;
-                setTimeout(() => this.checkReadyState(), CONFIG.TIMING.RETRY_DELAY_VERY_LONG);
-            } else {
-                const timeoutSeconds = CONFIG.TIMING.MAX_BACKGROUND_RETRY_ATTEMPTS * (CONFIG.TIMING.RETRY_DELAY_VERY_LONG / 1000);
-                console.error(`CharacterManager: Background check timed out after ${timeoutSeconds} seconds`);
-                if (statusEl) {
-                    statusEl.innerHTML = '⚠️ Background generation is taking longer than expected. Please check your backend connection and try refreshing.';
-                    statusEl.style.color = '#ff9800';
-                }
+    }
+
+    private async checkSpriteCache(): Promise<boolean> {
+        const savedImage = await this.getStoredItem('original_dog_image');
+        const savedSprite = await this.getStoredItem('custom_sprite_sheet');
+
+        if (this.uploadedImage === savedImage && savedSprite && this.isValidSpriteSheet(savedSprite)) {
+            console.log('Using cached sprite sheet for identical image.');
+            this.currentSpriteSheet = savedSprite;
+            this.spriteReady = true;
+            this.updatePreviewHTML(savedSprite, 'Sprite Sheet Ready!', true);
+            return true;
+        }
+
+        return false;
+    }
+
+    private isValidSpriteSheet(spriteSheet: string | null): boolean {
+        if (!spriteSheet) return false;
+        if (spriteSheet.length < 1000) return false;
+        if (!spriteSheet.startsWith('data:image/')) return false;
+        return true;
+    }
+
+    private async handleSpriteGenerationSuccess(spriteSheetUrl: string): Promise<void> {
+        this.currentSpriteSheet = spriteSheetUrl;
+        this.spriteReady = true;
+        this.isGeneratingSprite = false;
+
+        // Cache the sprite
+        await this.setStoredItem('custom_sprite_sheet', spriteSheetUrl);
+        if (this.uploadedImage) {
+            await this.setStoredItem('original_dog_image', this.uploadedImage);
+        }
+        localStorage.setItem('has_custom_character', 'true');
+
+        this.updatePreviewHTML(spriteSheetUrl, 'Sprite Sheet Ready!', true);
+        console.log('✓ Sprite sheet generated successfully');
+
+        await this.checkAllAssetsReady();
+    }
+
+    private handleSpriteGenerationFailure(statusEl: HTMLElement | null): void {
+        this.isGeneratingSprite = false;
+        this.updateStatus(
+            statusEl,
+            `❌ Sprite generation failed after ${RETRY_CONFIG.MAX_ATTEMPTS} attempts. Please try again.`,
+            '#ff6b6b'
+        );
+        this.addRetryButton(statusEl);
+    }
+
+    // ==================================================================================
+    // ASSET READY STATE MANAGEMENT
+    // ==================================================================================
+
+    public async checkAllAssetsReady(): Promise<void> {
+        const statusEl = document.getElementById('generation-status');
+
+        // Check sprite
+        if (!this.spriteReady || !this.currentSpriteSheet) {
+            this.updateStatus(statusEl, '<div class="loader"></div> Waiting for sprite generation...', '#ffd700');
+            this.updateStartButton();
+            return;
+        }
+
+        // Check background
+        await this.checkBackgroundReady();
+
+        if (!this.backgroundReady) {
+            this.updateStatus(statusEl, '<div class="loader"></div> Waiting for background generation...', '#ffd700');
+            this.updateStartButton();
+
+            // Start polling for background
+            if (!this.isCheckingBackground) {
+                this.pollBackgroundReady();
             }
             return;
         }
-        
-        // Reset retry count on success
-        (this as any)._backgroundRetryCount = 0;
-        
-        // Both are ready!
-        console.log('CharacterManager: Both sprite sheet and background ready, enabling button');
-        
-        // In debug mode, display background images before enabling button
+
+        // All assets ready!
+        console.log('✓ All assets ready - game can start');
+        this.updateStatus(statusEl, '✓ All assets ready! Click "Start Game" to begin.', '#4CAF50');
+        this.updateStartButton();
+
         if (CONFIG.DEBUG_MODE) {
             await this.displayBackgroundPreview();
         }
-        
-        if (statusEl) {
-            statusEl.textContent = '✓ Ready to play! Click "Start Game" to begin.';
-            statusEl.style.color = '#4CAF50';
-        }
-        if (startBtn) {
-            startBtn.disabled = false;
-        }
     }
 
-    /**
-     * Display background images in debug mode (for debugging background rendering issues)
-     */
-    async displayBackgroundPreview(): Promise<void> {
-        if (!CONFIG.DEBUG_MODE) {
-            return; // Only in debug mode
-        }
-        
-        console.log('🔍 DEBUG MODE: Displaying background preview...');
-        
+    private async checkBackgroundReady(): Promise<boolean> {
         try {
-            // Get background frames from storage
-            let frames: string[] | null = null;
-            
-            // Try AssetStorage first
-            const framesStr = await this.assetStorage.getItem('location_background_frames');
+            const framesStr = await this.getStoredItem('location_background_frames');
+
             if (framesStr) {
-                frames = JSON.parse(framesStr);
+                const frames: unknown = JSON.parse(framesStr);
+                this.backgroundReady = Array.isArray(frames) && frames.length >= BACKGROUND_POLL_CONFIG.MIN_FRAMES_REQUIRED;
             } else {
-                // Fallback to localStorage
-                const localFramesStr = localStorage.getItem('location_background_frames');
-                if (localFramesStr) {
-                    frames = JSON.parse(localFramesStr);
-                }
+                this.backgroundReady = false;
             }
-            
-            if (!frames || frames.length === 0) {
-                console.warn('🔍 DEBUG: No background frames found to display');
+        } catch (error) {
+            console.error('Error checking background:', error);
+            this.backgroundReady = false;
+        }
+
+        return this.backgroundReady;
+    }
+
+    private async pollBackgroundReady(): Promise<void> {
+        if (this.isCheckingBackground) return;
+
+        this.isCheckingBackground = true;
+        let attempts = 0;
+
+        while (attempts < BACKGROUND_POLL_CONFIG.MAX_ATTEMPTS && !this.backgroundReady) {
+            attempts++;
+            await this.sleep(BACKGROUND_POLL_CONFIG.INTERVAL_MS);
+
+            const ready = await this.checkBackgroundReady();
+            console.log(`Background check ${attempts}/${BACKGROUND_POLL_CONFIG.MAX_ATTEMPTS}: ${ready ? 'Ready' : 'Not ready'}`);
+
+            if (ready) {
+                this.isCheckingBackground = false;
+                await this.checkAllAssetsReady();
                 return;
             }
-            
-            console.log(`🔍 DEBUG: Found ${frames.length} background frames, displaying preview...`);
-            
-            // Create or get preview container
-            let previewContainer = document.getElementById('debug-background-preview');
-            if (!previewContainer) {
-                previewContainer = document.createElement('div');
-                previewContainer.id = 'debug-background-preview';
-                previewContainer.style.cssText = `
-                    margin-top: 20px;
-                    padding: 15px;
-                    background: #1a1a1a;
-                    border: 2px solid #4CAF50;
-                    border-radius: 8px;
-                    max-height: 400px;
-                    overflow-y: auto;
-                `;
-                
-                const title = document.createElement('h3');
-                title.textContent = '🔍 DEBUG: Background Frames Preview';
-                title.style.cssText = 'color: #4CAF50; margin-top: 0; margin-bottom: 10px; font-size: 14px;';
-                previewContainer.appendChild(title);
-                
-                const statusEl = document.getElementById('generation-status');
-                if (statusEl && statusEl.parentNode) {
-                    statusEl.parentNode.insertBefore(previewContainer, statusEl.nextSibling);
-                }
-            } else {
-                // Clear existing content
-                previewContainer.innerHTML = '';
-                const title = document.createElement('h3');
-                title.textContent = '🔍 DEBUG: Background Frames Preview';
-                title.style.cssText = 'color: #4CAF50; margin-top: 0; margin-bottom: 10px; font-size: 14px;';
-                previewContainer.appendChild(title);
-            }
-            
-            // Display each frame
-            const frameInfo = document.createElement('p');
-            frameInfo.textContent = `Showing ${frames.length} frames (1024x1024 each):`;
-            frameInfo.style.cssText = 'color: #ccc; font-size: 12px; margin-bottom: 10px;';
-            previewContainer.appendChild(frameInfo);
-            
-            const gridContainer = document.createElement('div');
-            gridContainer.style.cssText = `
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 10px;
-            `;
-            
-            frames.forEach((frameBase64, index) => {
-                const frameDiv = document.createElement('div');
-                frameDiv.style.cssText = `
-                    border: 1px solid #555;
-                    padding: 5px;
-                    background: #2a2a2a;
-                    border-radius: 4px;
-                `;
-                
-                const label = document.createElement('div');
-                label.textContent = `Frame ${index + 1}/${frames.length}`;
-                label.style.cssText = 'color: #aaa; font-size: 11px; margin-bottom: 5px; text-align: center;';
-                frameDiv.appendChild(label);
-                
-                const img = document.createElement('img');
-                img.src = frameBase64;
-                img.style.cssText = `
-                    width: 100%;
-                    height: auto;
-                    max-width: 200px;
-                    max-height: 200px;
-                    object-fit: contain;
-                    border: 1px solid #333;
-                    border-radius: 2px;
-                    display: block;
-                    margin: 0 auto;
-                `;
-                img.alt = `Background frame ${index + 1}`;
-                
-                // Add click to view full size
-                img.onclick = () => {
-                    const fullSize = window.open('', '_blank');
-                    if (fullSize) {
-                        fullSize.document.write(`
-                            <html>
-                                <head><title>Frame ${index + 1} - Full Size</title></head>
-                                <body style="margin:0; background:#000; display:flex; justify-content:center; align-items:center; min-height:100vh;">
-                                    <img src="${frameBase64}" style="max-width:100%; max-height:100vh;" alt="Frame ${index + 1}">
-                                </body>
-                            </html>
-                        `);
-                    }
-                };
-                img.style.cursor = 'pointer';
-                img.title = 'Click to view full size';
-                
-                frameDiv.appendChild(img);
-                gridContainer.appendChild(frameDiv);
-            });
-            
-            previewContainer.appendChild(gridContainer);
-            
-            console.log('🔍 DEBUG: Background preview displayed successfully');
-        } catch (error) {
-            console.error('🔍 DEBUG: Error displaying background preview:', error);
+        }
+
+        this.isCheckingBackground = false;
+
+        if (!this.backgroundReady) {
+            const statusEl = document.getElementById('generation-status');
+            this.updateStatus(
+                statusEl,
+                '❌ Background generation timed out. Please refresh the page.',
+                '#ff6b6b'
+            );
+            this.addRefreshButton(statusEl);
         }
     }
 
-    async startGame(): Promise<void> {
-        if (!this.currentSpriteSheet) {
-            alert('Please generate a sprite sheet first');
+    private updateStartButton(): void {
+        const startBtn = document.getElementById('start-game-btn') as HTMLButtonElement | null;
+
+        if (!startBtn) return;
+
+        const canStart = this.spriteReady && this.backgroundReady && this.currentSpriteSheet !== null;
+        startBtn.disabled = !canStart;
+
+        if (canStart) {
+            startBtn.textContent = 'Start Game';
+            startBtn.classList.add('ready');
+        } else {
+            startBtn.textContent = 'Loading Assets...';
+            startBtn.classList.remove('ready');
+        }
+    }
+
+    // ==================================================================================
+    // GAME START
+    // ==================================================================================
+
+    public async startGame(): Promise<void> {
+        // Double-check all assets are ready
+        if (!this.spriteReady || !this.backgroundReady || !this.currentSpriteSheet) {
+            const statusEl = document.getElementById('generation-status');
+            this.updateStatus(statusEl, '⚠️ Please wait for all assets to load.', '#ff9800');
             return;
         }
 
         const startBtn = document.getElementById('start-game-btn') as HTMLButtonElement | null;
-        const statusEl = document.getElementById('generation-status');
-        
-        // Disable button and show loading status
-        if (startBtn) {
-            startBtn.disabled = true;
-        }
-        if (statusEl) {
-            statusEl.textContent = 'Loading Level 1 Visuals...';
-            statusEl.style.color = '#ffd700';
-        }
+        if (startBtn) startBtn.disabled = true;
 
         try {
-            // Using procedural tile rendering - no level image preload needed
-            console.log('Using procedural tile rendering');
+            this.showGameScreen();
 
-            // Hide menu, show game
-            const menuScreen = document.getElementById('menu-screen');
-            const gameScreen = document.getElementById('game-screen');
-            if (menuScreen) {
-                menuScreen.classList.add('hidden');
-            }
-            if (gameScreen) {
-                gameScreen.classList.remove('hidden');
-            }
-            
-            // Update debug indicator when game screen is shown
             if (window.updateDebugIndicators) {
                 window.updateDebugIndicators();
             }
 
-            // Initialize game with custom sprite (no level image, will use procedural tiles)
             if (this.currentGameInstance) {
                 this.currentGameInstance.destroy();
             }
-            
-            // Create game instance with injected dependencies
-            // No longer using LEVELS - using simple floor instead
+
             this.currentGameInstance = new this.gameClass(
                 this.currentSpriteSheet,
                 this.apiService,
                 this.assetStorage,
                 null
             );
-            
-            // Game instance is stored in CharacterManager, no need for window assignment
-            
-            // Reset status
-            if (statusEl) {
-                statusEl.textContent = '';
-            }
-            
-            // Re-enable button ONLY if we are back in menu (which we aren't, but for safety)
-            if (startBtn) {
-                startBtn.disabled = false;
-            }
 
-        } catch (error: any) {
-            // This catches errors in the setup logic itself, not the API call
-            console.error('Error starting game:', error);
-            if (statusEl) {
-                statusEl.textContent = `❌ Error starting game: ${error.message}`;
-                statusEl.style.color = '#ff6b6b';
-            }
-            if (startBtn) {
-                startBtn.disabled = false;
-            }
+        } catch (error) {
+            this.handleGameStartError(error, startBtn);
         }
     }
 
-    async loadSavedCharacter(): Promise<void> {
-        let savedSprite: string | undefined, savedImage: string | undefined;
-        savedSprite = await this.assetStorage.getItem('custom_sprite_sheet') as string | undefined;
-        savedImage = await this.assetStorage.getItem('original_dog_image') as string | undefined;
-        
-        // Fallback to localStorage if AssetStorage doesn't have it
-        if (!savedSprite) {
-            savedSprite = localStorage.getItem('custom_sprite_sheet') || undefined;
-        }
-        if (!savedImage) {
-            savedImage = localStorage.getItem('original_dog_image') || undefined;
-        }
-        
-        if (savedSprite) {
+    private showGameScreen(): void {
+        document.getElementById('menu-screen')?.classList.add('hidden');
+        document.getElementById('game-screen')?.classList.remove('hidden');
+    }
+
+    private showMenuScreen(): void {
+        document.getElementById('menu-screen')?.classList.remove('hidden');
+        document.getElementById('game-screen')?.classList.add('hidden');
+    }
+
+    private handleGameStartError(error: unknown, startBtn: HTMLButtonElement | null): void {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error('Error starting game:', error);
+
+        const statusEl = document.getElementById('generation-status');
+        this.updateStatus(statusEl, `❌ Error starting game: ${errorMessage}`, '#ff6b6b');
+
+        this.showMenuScreen();
+
+        if (startBtn) startBtn.disabled = false;
+    }
+
+    public async loadSavedCharacter(): Promise<void> {
+        const savedSprite = await this.getStoredItem('custom_sprite_sheet');
+        const savedImage = await this.getStoredItem('original_dog_image');
+
+        if (savedSprite && this.isValidSpriteSheet(savedSprite)) {
             this.currentSpriteSheet = savedSprite;
-            this.uploadedImage = savedImage || null;
-            
-            const preview = document.getElementById('upload-preview');
-            if (preview && savedImage) {
-                preview.innerHTML = `<img src="${savedImage}" alt="Dog preview" class="pixelated">`;
+            this.uploadedImage = savedImage;
+            this.spriteReady = true;
+
+            if (savedImage) {
+                this.updatePreviewHTML(savedImage, 'Dog preview');
             }
-            
-            // Check if ready to start
-            await this.checkReadyState();
-        } else {
-            // No saved character, ensure start button is disabled
-            const startBtn = document.getElementById('start-game-btn') as HTMLButtonElement | null;
-            if (startBtn) {
-                startBtn.disabled = true;
-            }
+
+            console.log('Loaded saved character from storage');
         }
+
+        // Always check full asset state
+        await this.checkAllAssetsReady();
+    }
+
+    // ==================================================================================
+    // UI HELPERS
+    // ==================================================================================
+
+    private sleep(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    private updateStatus(el: HTMLElement | null, html: string, color: string): void {
+        if (el) {
+            el.innerHTML = html;
+            el.style.color = color;
+        }
+    }
+
+    private updatePreviewHTML(src: string, altText: string, isSprite: boolean = false): void {
+        const preview = document.getElementById('upload-preview');
+
+        if (!preview) return;
+
+        const style = isSprite ? 'width: 256px; height: 256px;' : '';
+        const caption = isSprite ? '<p style="margin-top: 10px; font-size: 0.9em;">✓ Sprite Sheet Ready!</p>' : '';
+
+        preview.innerHTML = `
+            <div>
+                <img src="${src}" alt="${altText}" class="pixelated" style="${style}">
+                ${caption}
+            </div>
+        `;
+    }
+
+    private addRetryButton(statusEl: HTMLElement | null): void {
+        if (!statusEl || document.getElementById('retry-sprite-btn')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'retry-sprite-btn';
+        btn.className = 'retry-button';
+        btn.textContent = '🔄 Retry Sprite Generation';
+        btn.style.cssText = `
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        `;
+
+        btn.onclick = (): void => {
+            btn.remove();
+            this.generateSpriteSheetWithRetry();
+        };
+
+        statusEl.appendChild(document.createElement('br'));
+        statusEl.appendChild(btn);
+    }
+
+    private addRefreshButton(statusEl: HTMLElement | null): void {
+        if (!statusEl || document.getElementById('refresh-page-btn')) return;
+
+        const btn = document.createElement('button');
+        btn.id = 'refresh-page-btn';
+        btn.className = 'refresh-button';
+        btn.textContent = '🔄 Refresh Page';
+        btn.style.cssText = `
+            margin-top: 15px;
+            padding: 10px 20px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        `;
+
+        btn.onclick = (): void => {
+            window.location.reload();
+        };
+
+        statusEl.appendChild(document.createElement('br'));
+        statusEl.appendChild(btn);
+    }
+
+    public async displayBackgroundPreview(): Promise<void> {
+        if (!CONFIG.DEBUG_MODE) return;
+
+        console.log('🔍 DEBUG: Displaying background preview...');
+
+        const framesStr = await this.getStoredItem('location_background_frames');
+        if (!framesStr) return;
+
+        let frames: string[];
+        try {
+            frames = JSON.parse(framesStr);
+        } catch {
+            return;
+        }
+
+        if (!Array.isArray(frames) || frames.length === 0) return;
+
+        let container = document.getElementById('debug-background-preview');
+
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'debug-background-preview';
+            Object.assign(container.style, {
+                marginTop: '20px',
+                padding: '15px',
+                background: '#1a1a1a',
+                border: '2px solid #4CAF50',
+                borderRadius: '8px',
+                maxHeight: '400px',
+                overflowY: 'auto',
+            });
+
+            const statusEl = document.getElementById('generation-status');
+            statusEl?.parentNode?.insertBefore(container, statusEl.nextSibling);
+        }
+
+        container.innerHTML = `
+            <h3 style="color:#4CAF50;margin:0 0 10px 0;font-size:14px">
+                🔍 DEBUG: Background Frames (${frames.length})
+            </h3>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+                ${frames.map((src: string, i: number) => `
+                    <div style="background:#2a2a2a;padding:5px;border-radius:4px;text-align:center">
+                        <div style="color:#aaa;font-size:11px;margin-bottom:5px">Frame ${i + 1}</div>
+                        <img src="${src}" style="width:100%;border:1px solid #333" title="Frame ${i + 1}">
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    // ==================================================================================
+    // PUBLIC GETTERS FOR DEBUGGING
+    // ==================================================================================
+
+    public getReadyState(): ReadyState {
+        return {
+            sprite: this.spriteReady,
+            background: this.backgroundReady,
+            canStart: this.spriteReady && this.backgroundReady && this.currentSpriteSheet !== null,
+        };
+    }
+
+    public getSpriteSheet(): string | null {
+        return this.currentSpriteSheet;
+    }
+
+    public getUploadedImage(): string | null {
+        return this.uploadedImage;
     }
 }
-
-// Note: CharacterManager initialization is now handled in main.ts
-// This module just exports the CharacterManager class
-// The initialization code that waits for APIService has been moved to main.ts

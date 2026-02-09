@@ -3,37 +3,164 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MyPup</title>
+    <title>MyPup - AI Platformer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <div id="game-container">
-        <div id="menu-screen" class="screen">
+        <!-- ============================================ -->
+        <!-- LOADING SCREEN -->
+        <!-- ============================================ -->
+        <div id="loading-screen" class="screen">
+            <img src="assets/MyPupLogo.png" alt="MyPup Platformer" id="loading-logo">
+
+            <div id="loading-container">
+                <h2 id="loading-title">Preparing Your Adventure</h2>
+                <p id="loading-subtitle">Generating AI assets...</p>
+
+                <div id="loading-bar-container">
+                    <div id="loading-bar">
+                        <div id="loading-bar-fill"></div>
+                    </div>
+                    <span id="loading-percentage">0%</span>
+                </div>
+
+                <div id="loading-status">
+                    <div class="loading-item" id="loading-background">
+                        <span class="loading-icon">⏳</span>
+                        <span class="loading-text">Background</span>
+                    </div>
+                    <div class="loading-item" id="loading-enemies">
+                        <span class="loading-icon">⏳</span>
+                        <span class="loading-text">Enemies</span>
+                    </div>
+                </div>
+
+                <p id="loading-tip" class="loading-tip">💡 Tip: Upload a photo of your dog to play as them!</p>
+            </div>
+        </div>
+
+        <!-- ============================================ -->
+        <!-- MENU SCREEN -->
+        <!-- ============================================ -->
+        <div id="menu-screen" class="screen hidden">
             <img src="assets/MyPupLogo.png" alt="MyPup Platformer" id="game-logo">
+
             <div id="customization-panel">
                 <div id="debug-mode-indicator" class="debug-indicator" style="display: none;"></div>
+
                 <div class="upload-section">
                     <label for="dog-image-upload" class="upload-button">
-                        📸 Upload Your Dog's Photo
+                        <span class="upload-icon">📸</span>
+                        <span class="upload-text">Upload Your Dog's Photo</span>
                     </label>
                     <input type="file" id="dog-image-upload" accept="image/*" style="display: none;">
                     <div id="upload-preview" class="preview-container"></div>
                 </div>
+
+                <div id="sprite-generation-progress" class="progress-container hidden">
+                    <div class="progress-bar">
+                        <div id="sprite-progress-fill" class="progress-fill"></div>
+                    </div>
+                    <span id="sprite-progress-text" class="progress-text">Generating sprite...</span>
+                </div>
+
                 <div id="generation-status" class="status-message"></div>
-                <button id="start-game-btn" class="action-button" disabled>Start Game</button>
+
+                <button id="start-game-btn" class="action-button" disabled>
+                    <span class="button-icon">🎮</span>
+                    <span>Start Game</span>
+                </button>
+
+                <div class="instructions">
+                    <h3>How to Play</h3>
+                    <div class="instruction-grid">
+                        <div class="instruction-item">
+                            <span class="key">←→</span>
+                            <span>Move</span>
+                        </div>
+                        <div class="instruction-item">
+                            <span class="key">↑</span>
+                            <span>Jump</span>
+                        </div>
+                        <div class="instruction-item">
+                            <span class="key">SPACE</span>
+                            <span>Jump</span>
+                        </div>
+                        <div class="instruction-item">
+                            <span class="key">ESC</span>
+                            <span>Pause</span>
+                        </div>
+                    </div>
+                    <p class="tip">💡 Stomp on enemies to defeat them!</p>
+                </div>
             </div>
         </div>
+
+        <!-- ============================================ -->
+        <!-- GAME SCREEN -->
+        <!-- ============================================ -->
         <div id="game-screen" class="screen hidden">
             <div id="debug-mode-indicator-game" class="debug-indicator-game" style="display: none;"></div>
+
+            <!-- Phaser Canvas Container -->
             <div id="phaser-game"></div>
+
+            <!-- Game UI Overlay -->
             <div id="game-ui">
-                <div id="score">Score: 0</div>
-                <div id="lives">Lives: 3</div>
-                <button id="pause-btn" class="ui-button">Pause</button>
+                <div class="ui-left">
+                    <div id="score" class="ui-stat">
+                        <span class="stat-icon">⭐</span>
+                        <span class="stat-value">0</span>
+                    </div>
+                    <div id="level" class="ui-stat">
+                        <span class="stat-icon">🏔️</span>
+                        <span class="stat-value">Level 1</span>
+                    </div>
+                </div>
+
+                <div class="ui-center">
+                    <div id="lives" class="ui-lives">
+                        <span class="heart">❤️</span>
+                        <span class="heart">❤️</span>
+                        <span class="heart">❤️</span>
+                    </div>
+                </div>
+
+                <div class="ui-right">
+                    <button id="pause-btn" class="ui-button">
+                        <span class="button-icon">⏸️</span>
+                        <span class="button-text">Pause</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Mobile Controls (Hidden by default, shown on touch devices) -->
+            <div id="mobile-controls" class="mobile-controls hidden">
+                <div class="mobile-dpad">
+                    <button class="mobile-btn" id="mobile-left">◀</button>
+                    <button class="mobile-btn" id="mobile-right">▶</button>
+                </div>
+                <button class="mobile-btn mobile-jump" id="mobile-jump">JUMP</button>
             </div>
         </div>
     </div>
+
+    <!-- Phaser.js -->
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+
+    <!-- Game Scripts -->
     <script type="module" src="dist/main.js"></script>
+
+    <!-- Mobile Detection -->
+    <script>
+        // Show mobile controls on touch devices
+        if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+            document.getElementById('mobile-controls')?.classList.remove('hidden');
+        }
+    </script>
 </body>
 </html>
